@@ -64,7 +64,7 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 
 결과는 `runs/`에 markdown, JSON, Notion 행 payload(`*.notion.json`, 아이디어 허브의 주장·근거 DB와 연결 DB 속성 이름)로 저장됩니다.
 
-환경 변수: `COUNCIL_BACKEND`(`claude-code`·`mixed`·`openrouter`, Gemini 키가 있으면 `mixed`가 기본), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`, `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `GEMINI_MODEL`.
+환경 변수: `COUNCIL_BACKEND`(`claude-code`·`mixed`·`openrouter`, Gemini 자격이 있으면 `mixed`가 기본), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`, `AGY_OAUTH_TOKEN_B64`, `AGY_BIN`, `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `GEMINI_MODEL`.
 
 역할은 `--out` 폴더의 가장 최근 실행 JSON에서 위원별 역할을 읽어 한 칸씩 밉니다(확장자 → 비판자 → 실행가 → 연결자 → 확장자). 네 번 돌면 모든 모델이 모든 역할을 한 번씩 맡습니다. 이전 실행이 없거나 위원 구성이 바뀌면 무작위로 정합니다.
 
@@ -79,15 +79,16 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 #### Claude + Gemini 백엔드 (`mixed`)
 
 ```bash
-export GEMINI_API_KEY=...   # 클라우드 세션에서는 환경 설정의 비밀값으로 넣습니다
-idea-council "이 아이디어의 가장 약한 고리는?"   # 키가 있으면 자동으로 mixed
+bash scripts/agy_setup.sh   # AGY_OAUTH_TOKEN_B64가 있으면 agy 설치·로그인 토큰 복원(첫 실행 때 자동으로도 부름)
+idea-council "이 아이디어의 가장 약한 고리는?"   # Gemini 자격이 있으면 자동으로 mixed
 ```
 
-- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 1명(`GEMINI_MODEL`, 기본 `gemini-3.1-pro-preview`)을 더한 5명입니다. 의장과 검증자는 Claude 그대로입니다.
-- Gemini는 Gemini API(`generateContent`)를 키로 직접 부릅니다. 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
+- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 1명(`GEMINI_MODEL`, 기본 `gemini-3.8-flash-high`)을 더한 5명입니다. 의장과 검증자는 Claude 그대로입니다.
+- Gemini는 두 길로 부릅니다. 먼저 Antigravity CLI(`agy -p`)를 `AGY_OAUTH_TOKEN_B64` 로그인 토큰으로 씁니다(Miner 저장소 `blog/scripts/final_polish.py`와 같은 방식, API 키 불필요). 안 되면 `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`)로 Gemini API를 부릅니다.
+- `agy`는 빈 임시 폴더, `--sandbox`, 최소 환경(프록시·인증서 변수만)에서 돌려 다른 비밀값을 넘기지 않습니다.
+- 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
 - 역할이 4개라 다섯 번째 위원은 한 역할을 겹쳐 맡습니다(의장에게는 "확장자 2"처럼 보임). 순환은 그대로 한 칸씩 돕니다.
-- 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
-- Claude 계열만 있을 때의 한계(다른 회사 모델이 없음)를 위원 한 자리만큼 메웁니다.
+- API 키 경로는 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
 
 #### OpenRouter 백엔드 (선택)
 

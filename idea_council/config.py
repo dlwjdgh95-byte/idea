@@ -10,10 +10,11 @@ gemini-3-pro-preview and grok-4 are gone). Those ids go stale, so the CLI
 checks them against OpenRouter's model list before a run. Override any
 model with environment variables.
 
-The ``mixed`` backend seats Gemini (Gemini API, ``GEMINI_API_KEY``) next to
-the four Claude members, so one member comes from another vendor. The
-chairman and verifier stay Claude. The CLI picks it by default when a
-Gemini key is set.
+The ``mixed`` backend seats Gemini next to the four Claude members, so one
+member comes from another vendor. Gemini is reached through the Antigravity
+CLI (``AGY_OAUTH_TOKEN_B64``, as in the Miner repo) or the Gemini API
+(``GEMINI_API_KEY``). The chairman and verifier stay Claude. The CLI picks
+this backend by default when either credential is set.
 """
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ OPENROUTER_MEMBERS: tuple[str, ...] = (
 OPENROUTER_CHAIRMAN = "google/gemini-3.1-pro-preview"
 OPENROUTER_VERIFIER = "anthropic/claude-sonnet-5.5"
 
-GEMINI_MODEL = "gemini-3.1-pro-preview"
+#: The id the Miner repo's agy polish step runs on (2026-10-15).
+GEMINI_MODEL = "gemini-3.8-flash-high"
 
 
 def gemini_model() -> str:

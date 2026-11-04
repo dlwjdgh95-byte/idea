@@ -1,13 +1,18 @@
 import asyncio
+import json
+import sys
 
 import httpx
 import pytest
 
 from idea_council import cli
 from idea_council.config import CLAUDE_CHAIRMAN, CLAUDE_MEMBERS, CouncilConfig
+from idea_council import gemini as gemini_mod
 from idea_council.gemini import (
+    AgyClient,
     GeminiClient,
     RoutedClient,
+    gemini_client,
     missing_gemini_models,
     parse_gemini_response,
     to_gemini_request,
@@ -134,8 +139,58 @@ def test_cli_defaults_to_mixed_only_when_a_key_is_set(monkeypatch):
 
     monkeypatch.setattr(cli.CouncilConfig, "from_env", staticmethod(stop))
     monkeypatch.delenv("COUNCIL_BACKEND", raising=False)
+    monkeypatch.delenv("AGY_OAUTH_TOKEN_B64", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     assert cli.main(["q"]) == 2 and seen["backend"] == "claude-code"
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     assert cli.main(["q"]) == 2 and seen["backend"] == "mixed"
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.setenv("AGY_OAUTH_TOKEN_B64", "dA==")
+    assert cli.main(["q"]) == 2 and seen["backend"] == "mixed"
+
+
+def fake_agy(tmp_path, body: str) -> str:
+    script = tmp_path / "fake_agy.py"
+    script.write_text(body, encoding="utf-8")
+    wrapper = tmp_path / "agy"
+    wrapper.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    return str(wrapper)
+
+
+def test_agy_client_passes_one_prompt_and_keeps_secrets_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLOGGER_REFRESH_TOKEN", "secret")
+    binary = fake_agy(tmp_path, (
+        "import json, os, sys\n"
+        "a = sys.argv[1:]\n"
+        "print(json.dumps({'prompt': a[a.index('-p') + 1], 'model': a[a.index('--model') + 1],\n"
+        "  'sandbox': '--sandbox' in a, 'leak': 'BLOGGER_REFRESH_TOKEN' in os.environ, 'cwd': os.listdir('.')}))\n"
+    ))
+    c = asyncio.run(AgyClient(binary).complete(
+        "gemini-x", [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]))
+    out = json.loads(c.text)
+    assert c.ok and out["model"] == "gemini-x" and out["sandbox"] and out["cwd"] == []
+    assert out["prompt"].startswith("S") and out["prompt"].endswith("U")
+    assert not out["leak"]
+
+
+def test_agy_client_reports_failures(tmp_path):
+    binary = fake_agy(tmp_path, "import sys\nprint('not logged in', file=sys.stderr)\nsys.exit(3)\n")
+    c = asyncio.run(AgyClient(binary, max_retries=1).complete("gemini-x", [{"role": "user", "content": "U"}]))
+    assert c.error == "agy exit 3: not logged in"
+    empty = fake_agy(tmp_path, "pass\n")
+    assert asyncio.run(AgyClient(empty, max_retries=1).complete("g", [{"role": "user", "content": "U"}])).error
+
+
+def test_gemini_client_prefers_agy_and_falls_back_to_the_key(monkeypatch):
+    monkeypatch.setattr(gemini_mod, "find_agy", lambda setup=True: "/bin/agy")
+    monkeypatch.setenv("AGY_OAUTH_TOKEN_B64", "dA==")
+    assert isinstance(gemini_client(), AgyClient)
+    monkeypatch.setattr(gemini_mod, "find_agy", lambda setup=True: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert isinstance(gemini_client(), GeminiClient)
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        gemini_client()

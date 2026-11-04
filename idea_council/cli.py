@@ -16,7 +16,7 @@ from .claude_code import ClaudeCodeClient
 from .config import BACKENDS, DEFAULT_BACKEND, CouncilConfig
 from .council import Council, roles_from_run
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
-from .gemini import GeminiClient, RoutedClient, gemini_key, missing_gemini_models
+from .gemini import AgyClient, RoutedClient, gemini_available, gemini_client, missing_gemini_models
 from .llm import LLM, OpenRouterClient, missing_models
 
 
@@ -49,10 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--backend",
         choices=BACKENDS,
-        default=os.environ.get("COUNCIL_BACKEND") or ("mixed" if gemini_key() else DEFAULT_BACKEND),
+        default=os.environ.get("COUNCIL_BACKEND") or ("mixed" if gemini_available() else DEFAULT_BACKEND),
         help=(
-            "claude-code(로컬 claude CLI, 키 불필요), mixed(Claude 4명 + Gemini 1명, GEMINI_API_KEY 필요, "
-            "키가 있으면 기본), openrouter(여러 회사 모델, 키 필요)"
+            "claude-code(로컬 claude CLI, 키 불필요), mixed(Claude 4명 + Gemini 1명, AGY_OAUTH_TOKEN_B64 또는 "
+            "GEMINI_API_KEY가 있으면 기본), openrouter(여러 회사 모델, 키 필요)"
         ),
     )
     args = parser.parse_args(argv)
@@ -80,7 +80,14 @@ def main(argv: list[str] | None = None) -> int:
                     + "\nCOUNCIL_MODELS, CHAIRMAN_MODEL, VERIFIER_MODEL 환경 변수로 바꾸십시오.\n"
                 )
                 return 2
-    if args.backend == "mixed" and not args.skip_model_check and gemini_key():
+    gemini = None
+    if args.backend == "mixed":
+        try:
+            gemini = gemini_client(timeout_s=max(config.timeout_s, 300.0))
+        except RuntimeError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 2
+    if gemini is not None and not isinstance(gemini, AgyClient) and not args.skip_model_check:
         try:
             missing = asyncio.run(missing_gemini_models(config.all_models()))
         except httpx.HTTPError as exc:
@@ -97,10 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.backend == "claude-code":
             llm = ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0))
         elif args.backend == "mixed":
-            llm = RoutedClient(
-                ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0)),
-                GeminiClient(timeout_s=config.timeout_s),
-            )
+            llm = RoutedClient(ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0)), gemini)
         else:
             llm = OpenRouterClient(
                 timeout_s=config.timeout_s,
