@@ -121,13 +121,13 @@ def test_routed_client_sends_gemini_ids_to_gemini():
 
 
 def test_mixed_backend_seats_gemini_next_to_claude(monkeypatch):
-    for var in ("COUNCIL_MODELS", "CHAIRMAN_MODEL", "VERIFIER_MODEL", "GEMINI_MODEL"):
+    for var in ("COUNCIL_MODELS", "CHAIRMAN_MODEL", "VERIFIER_MODEL", "GEMINI_MODELS"):
         monkeypatch.delenv(var, raising=False)
     config = CouncilConfig.from_env("mixed")
-    assert config.members[:4] == CLAUDE_MEMBERS and config.members[4].startswith("gemini")
+    assert config.members == (*CLAUDE_MEMBERS, "gemini-4-argon-high", "gemini-3.8-flash-high")
     assert config.chairman == CLAUDE_CHAIRMAN
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-other")
-    assert CouncilConfig.from_env("mixed").members[4] == "gemini-other"
+    monkeypatch.setenv("GEMINI_MODELS", "gemini-other")
+    assert CouncilConfig.from_env("mixed").members[4:] == ("gemini-other",)
 
 
 def test_cli_defaults_to_mixed_only_when_a_key_is_set(monkeypatch):

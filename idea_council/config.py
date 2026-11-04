@@ -10,8 +10,8 @@ gemini-3-pro-preview and grok-4 are gone). Those ids go stale, so the CLI
 checks them against OpenRouter's model list before a run. Override any
 model with environment variables.
 
-The ``mixed`` backend seats Gemini next to the four Claude members, so one
-member comes from another vendor. Gemini is reached through the Antigravity
+The ``mixed`` backend seats two Gemini models (large and small) next to the
+four Claude members, so the council mixes vendors as well as sizes. Gemini is reached through the Antigravity
 CLI (``AGY_OAUTH_TOKEN_B64``, as in the Miner repo) or the Gemini API
 (``GEMINI_API_KEY``). The chairman and verifier stay Claude. The CLI picks
 this backend by default when either credential is set.
@@ -35,12 +35,12 @@ OPENROUTER_MEMBERS: tuple[str, ...] = (
 OPENROUTER_CHAIRMAN = "google/gemini-3.1-pro-preview"
 OPENROUTER_VERIFIER = "anthropic/claude-sonnet-5.5"
 
-#: The id the Miner repo's agy polish step runs on (2026-10-15).
-GEMINI_MODEL = "gemini-3.8-flash-high"
+#: Gemini members: the large and the small model, as listed by `agy models` (checked 2026-11-04).
+GEMINI_MODELS: tuple[str, ...] = ("gemini-4-argon-high", "gemini-3.8-flash-high")
 
 
-def gemini_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+def gemini_models() -> tuple[str, ...]:
+    return _split(os.environ.get("GEMINI_MODELS")) or GEMINI_MODELS
 
 
 BACKENDS: tuple[str, ...] = ("claude-code", "mixed", "openrouter")
@@ -92,7 +92,7 @@ class CouncilConfig:
         if backend == "openrouter":
             members, chairman, verifier = OPENROUTER_MEMBERS, OPENROUTER_CHAIRMAN, OPENROUTER_VERIFIER
         elif backend == "mixed":
-            members, chairman, verifier = (*CLAUDE_MEMBERS, gemini_model()), CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
+            members, chairman, verifier = (*CLAUDE_MEMBERS, *gemini_models()), CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
         else:
             members, chairman, verifier = CLAUDE_MEMBERS, CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
         seed = os.environ.get("COUNCIL_SEED")

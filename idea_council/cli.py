@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=BACKENDS,
         default=os.environ.get("COUNCIL_BACKEND") or ("mixed" if gemini_available() else DEFAULT_BACKEND),
         help=(
-            "claude-code(로컬 claude CLI, 키 불필요), mixed(Claude 4명 + Gemini 1명, AGY_OAUTH_TOKEN_B64 또는 "
+            "claude-code(로컬 claude CLI, 키 불필요), mixed(Claude 4명 + Gemini 2명, AGY_OAUTH_TOKEN_B64 또는 "
             "GEMINI_API_KEY가 있으면 기본), openrouter(여러 회사 모델, 키 필요)"
         ),
     )
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             if missing:
                 sys.stderr.write(
                     "Gemini API에 없는 모델입니다: " + ", ".join(missing)
-                    + "\nGEMINI_MODEL 환경 변수로 바꾸십시오.\n"
+                    + "\nGEMINI_MODELS 환경 변수로 바꾸십시오.\n"
                 )
                 return 2
     llm: LLM
