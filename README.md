@@ -87,6 +87,7 @@ idea-council "이 아이디어의 가장 약한 고리는?"   # Gemini 자격이
 - Gemini는 두 길로 부릅니다. 먼저 Antigravity CLI(`agy -p`)를 `AGY_OAUTH_TOKEN_B64` 로그인 토큰으로 씁니다(Miner 저장소 `blog/scripts/final_polish.py`와 같은 방식, API 키 불필요). 안 되면 `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`)로 Gemini API를 부릅니다.
 - `agy`는 빈 임시 폴더, `--sandbox`, 최소 환경(프록시·인증서 변수만)에서 돌려 다른 비밀값을 넘기지 않습니다.
 - 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
+- 세션 안 `idea-council` 스킬은 `scripts/agy_ask.sh <모델> <프롬프트 파일>`로 Gemini 위원을 부릅니다(같은 최소 환경·샌드박스).
 - 역할이 4개라 위원 2명은 역할을 겹쳐 맡습니다(의장에게는 "확장자 2"처럼 보임). 순환은 그대로 한 칸씩 돕니다.
 - API 키 경로는 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
 
