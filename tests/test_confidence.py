@@ -224,3 +224,9 @@ def test_own_document_does_not_lower_a_stronger_verdict():
             conflict_of_interest=True, checked="quote found")
     assert assess([fda, pr]).path == "path1"
     assert assess([pr]).band == (60, 79)
+
+
+def test_rebuttal_flag_does_not_override_path1():
+    a = [ev(f"https://a{i}.org/1", "A", operator=f"Lab{i}", origin=f"10.1/x{i}", checked="quote found")
+         for i in range(2)]
+    assert assess(a, rebuttal_found=True).path == "path1"

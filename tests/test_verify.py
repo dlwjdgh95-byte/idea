@@ -263,3 +263,37 @@ def test_server_errors_are_unchecked():
 
 def test_nature_pdf_link_doi():
     assert doi_of("https://www.nature.com/articles/s41586-020-2649-2.pdf") == "10.1038/s41586-020-2649-2"
+
+
+def test_rebuttal_flag_needs_a_credible_listed_rebuttal():
+    import asyncio as _a
+    import json as _j
+
+    from idea_council.llm import Completion
+    from idea_council.verify import Verifier
+
+    class LLM:
+        async def complete(self, model, messages, *, web_search=False):
+            evidence = [{"url": f"https://s{i}.example/a", "grade": "B", "stance": "support", "operator": f"O{i}",
+                         "origin": f"G{i}", "quote": "q" * 30} for i in range(3)]
+            body = {"evidence": evidence, "counter_search": "searched 'X wrong': nothing relevant",
+                    "rebuttal_found": True}
+            return Completion(model, "```json\n" + _j.dumps(body) + "\n```")
+
+    check = _a.run(Verifier(LLM(), "m", check_urls=False).verify("claim"))
+    assert check.verdict.passed  # a bare flag with no A/B rebuttal listed does not block
+
+
+def test_more_paper_url_forms_and_versioned_dois():
+    from idea_council.verify import work_lookup
+    assert work_lookup("https://arxiv.org/html/2306.05685v2") == ("doi", "10.48550/arxiv.2306.05685")
+    assert work_lookup("https://www.ncbi.nlm.nih.gov/pubmed/12345678") == ("pmid", "12345678")
+    assert doi_of("https://www.medrxiv.org/content/10.1101/2021.01.01.21249094v1") == "10.1101/2021.01.01.21249094"
+    assert doi_of("https://doi.org/10.5555/journal.v12") == "10.5555/journal.v12"  # a real DOI ending in v12
+
+
+def test_long_article_mentioning_captcha_is_not_a_bot_wall():
+    from idea_council.verify import _looks_like_challenge
+    assert _looks_like_challenge("<html><body>Just a moment... enable JavaScript and cookies</body></html>")
+    article = "<p>" + " ".join(["research"] * 300) + " CAPTCHA systems are studied here.</p>"
+    assert not _looks_like_challenge(article)

@@ -101,7 +101,10 @@ def _same_claim(a: str, b: str) -> bool:
     if x == y:
         return True
     short, long = sorted((x, y), key=len)
-    return short in long and len(short) >= 0.85 * len(long)
+    if short not in long or len(short) < 0.85 * len(long):
+        return False
+    extra = long.replace(short, "", 1)
+    return not any(ch.isdigit() for ch in extra)  # "50%" vs "50% in 2020" are different claims
 
 
 def merge_claims(items: list[tuple[str, bool, int]]) -> list[tuple[str, bool, int]]:

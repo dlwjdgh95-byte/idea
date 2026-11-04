@@ -85,6 +85,7 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "riss.kr",
         "scienceon.kisti.re.kr",
         "koreascience.kr",
+        "korea.kr",
         "europepmc.org",
         "core.ac.uk",
         "hal.science",
@@ -171,9 +172,12 @@ def _domain(url: str) -> str:
 
 _DOI = re.compile(r"(10\.\d{4,9}/[\x21-\x7e]+?)(?=$|[\s?#&\"'<>]|[^\x00-\x7f])", re.IGNORECASE)
 _DOI_TAIL = re.compile(
-    r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
+    r"(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)+$",
     re.IGNORECASE,
 )
+# bioRxiv/medRxiv append a version (…123456v2) to the URL but not to the DOI. Other publishers can have a
+# real DOI that ends in v<digits>, so the version is only stripped for 10.1101.
+_BIORXIV_VERSION = re.compile(r"^(10\.1101/[\d.]*\d)v\d+$", re.IGNORECASE)
 _ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf|html)/|[:\s]\s*(?:id\s*)?)(\d{4}\.\d{4,5})", re.IGNORECASE)
 _BARE_ARXIV = re.compile(r"^\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*$")
 
@@ -191,6 +195,7 @@ def doi_of(url: str) -> str | None:
         return None
     doi = match.group(1).rstrip(".,;)/")
     trimmed = _DOI_TAIL.sub("", doi).rstrip(".,;)/")
+    trimmed = _BIORXIV_VERSION.sub(r"\1", trimmed)
     return trimmed if "/" in trimmed and trimmed.split("/", 1)[1] else doi
 
 
@@ -361,8 +366,6 @@ def _assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]
-    if rebuttal_found:  # the counter search reported a rebuttal (perhaps dropped by the source check)
-        return verdict(50, (40, 59), "none", "미확정(반대 근거 검색에서 반박 발견)")
     if not any(g.shown for g in support):
         return verdict(50, (40, 59), "none", "미확정(독립성 미확인)")
     if a_sup >= 2 or primary_groups:
@@ -371,6 +374,8 @@ def _assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal
             return capped("인용 미확인")
         return verdict(95, (90, 99), "path1", "사실")
     if sup >= 3:
+        if rebuttal_found:  # path 2 needs a clean counter search; a credible rebuttal (A/B, no COI) blocks it
+            return verdict(50, (40, 59), "none", "미확정(반대 근거 검색에서 반박 발견)")
         if not counter_searched:
             return capped("반대 근거 검색 없음")
         if not any(g.confirmed for g in support):

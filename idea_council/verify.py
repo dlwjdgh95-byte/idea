@@ -200,8 +200,8 @@ def _openalex_abstract(work: dict[str, Any]) -> str:
     return " ".join(words[i] for i in sorted(words))
 
 
-_ARXIV_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.IGNORECASE)
-_PMID = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", re.IGNORECASE)
+_ARXIV_URL = re.compile(r"arxiv\.org/(?:abs|pdf|html)/(\d{4}\.\d{4,5})", re.IGNORECASE)
+_PMID = re.compile(r"(?:pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov/pubmed)/(\d+)", re.IGNORECASE)
 _PMCID = re.compile(r"/(PMC\d+)", re.IGNORECASE)
 
 
@@ -315,8 +315,11 @@ def _is_shell(body: str) -> bool:
 
 
 def _looks_like_challenge(body: str) -> bool:
-    low = body[:20000].lower()
-    return len(body) < 30000 and any(m in low for m in _CHALLENGE)
+    """A bot wall is a short page; an article that merely mentions 'captcha' or 'enable javascript' is not."""
+    if len(body) >= 30000 or len(_TAGS.sub(" ", body).split()) >= 200:
+        return False
+    low = body.lower()
+    return any(m in low for m in _CHALLENGE)
 
 
 async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
@@ -412,6 +415,11 @@ class Verifier:
         if data is None:
             return ClaimCheck(claim=claim, verdict=assess([]), error="verifier reply had no JSON block")
         evidence = [e for e in (_to_evidence(x) for x in as_list(data.get("evidence")) if isinstance(x, dict)) if e]
+        # The flag counts only if the verifier also listed a credible rebuttal (grade A/B, no conflict of
+        # interest), judged before the source check so a rebuttal page that could not be fetched still counts.
+        rebuttal = _flag(data.get("rebuttal_found")) and any(
+            e.stance == "contradict" and e.grade in ("A", "B") and not e.conflict_of_interest for e in evidence
+        )
         dropped: list[str] = []
         if self.check_urls:
             evidence, dropped = await filter_sources(evidence)
@@ -421,7 +429,7 @@ class Verifier:
             verdict=assess(
                 evidence,
                 counter_searched=counter_searched(counter),
-                rebuttal_found=_flag(data.get("rebuttal_found")),
+                rebuttal_found=rebuttal,
             ),
             evidence=evidence,
             dropped=dropped,

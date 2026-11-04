@@ -164,3 +164,10 @@ def test_claims_with_different_names_are_not_merged():
              ("서울에서 아파트 값은 강남구가 가장 비싸다", "서울에서 아파트 값은 서초구가 가장 비싸다")]
     for a, b in pairs:
         assert len(merge_claims([(a, False, 1), (b, False, 1)])) == 2
+
+
+def test_contained_claim_with_extra_number_is_not_merged():
+    from idea_council.council import merge_claims
+    a = "Korea's total fertility rate was the lowest in the OECD"
+    assert len(merge_claims([(a, False, 1), (a + " in 2023", False, 1)])) == 2
+    assert len(merge_claims([(a, False, 1), (a + " indeed", False, 1)])) == 1
