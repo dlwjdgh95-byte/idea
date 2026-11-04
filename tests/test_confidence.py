@@ -95,3 +95,21 @@ def test_missing_origin_or_operator_cannot_be_independent():
 def test_no_evidence_is_lack_of_evidence():
     v = assess([])
     assert v.label == "근거 부족" and v.confidence < 40
+
+
+def test_path2_needs_a_counter_search():
+    three = [ev(f"https://n{i}.com/1", operator=f"N{i}", origin=f"o{i}") for i in range(3)]
+    assert assess(three, counter_searched=True).passed
+    v = assess(three, counter_searched=False)
+    assert not v.passed and v.band == (60, 79)
+
+
+def test_unconfirmed_quotes_cannot_pass_alone():
+    pdf = ev("https://stats.gov/t.pdf", "A", operator="통계청", origin="통계청", primary=True,
+             checked="unchecked: not a text page")
+    assert assess([pdf]).band == (60, 79)
+    ok = ev("https://stats.gov/t.html", "A", operator="통계청", origin="통계청", primary=True, checked="quote found")
+    assert assess([ok]).passed
+    three = [ev(f"https://n{i}.com/1", operator=f"N{i}", origin=f"o{i}", checked="unchecked: access refused")
+             for i in range(3)]
+    assert not assess(three).passed

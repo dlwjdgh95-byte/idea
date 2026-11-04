@@ -39,7 +39,7 @@ class FakeLLM:
             data = {"evidence": [
                 {"url": f"https://site{i}.example/a", "grade": "B", "stance": "support",
                  "operator": f"운영자{i}", "origin": f"원출처{i}"} for i in range(3)
-            ]}
+            ], "counter_search": "반대 검색어 X: 반박 없음"}
             return Completion(model, "```json\n" + json.dumps(data, ensure_ascii=False) + "\n```")
         if "의장" in system:
             extra = {"links": [{"idea": "다른 아이디어", "insight": "같은 문제", "type": "같은 문제", "strength": 65}],
@@ -103,3 +103,17 @@ def test_duplicate_members_are_rejected():
     import pytest
     with pytest.raises(ValueError):
         CouncilConfig(members=("m/a", "m/a"))
+
+
+def test_gate_survives_a_crashing_verifier_and_exports_judgement():
+    class Boom:
+        async def verify(self, claim, context=""):
+            raise RuntimeError("boom")
+    llm = FakeLLM()
+    config = CouncilConfig(members=MEMBERS, chairman="m/chair", verifier="m/verifier", check_source_urls=False)
+    council = Council(llm, config, verifier=Boom(), rng=random.Random(1))
+    result = asyncio.run(council.run("q", "c", []))
+    assert result.checks and all(c.error for c in result.checks)
+    rows = notion_claim_rows(result)
+    assert {r["판정"] for r in rows} == {"확인 불가"}
+    assert {r["중요도"] for r in rows} == {"핵심", "보조"}  # suspect claim is 보조, members' key claims 핵심

@@ -40,3 +40,7 @@ def test_json_review_without_ranking_keeps_suspect_claims():
 def test_mentions_are_not_a_ranking():
     review = parse_review("응답 B는 약하고 응답 A가 낫다", ["A", "B"])
     assert review.ranking == []
+
+
+def test_uppercase_json_fence():
+    assert last_json_block('```JSON\n{"x": 2}\n```') == {"x": 2}

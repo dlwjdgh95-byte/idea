@@ -43,6 +43,29 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "youtube.com",
         "wordpress.com",
         "blogspot.com",
+        # large publishers: unrelated papers share the domain
+        "sciencedirect.com",
+        "springer.com",
+        "link.springer.com",
+        "nature.com",
+        "wiley.com",
+        "onlinelibrary.wiley.com",
+        "tandfonline.com",
+        "mdpi.com",
+        "frontiersin.org",
+        "plos.org",
+        "journals.plos.org",
+        "sagepub.com",
+        "oup.com",
+        "academic.oup.com",
+        "cambridge.org",
+        "ieeexplore.ieee.org",
+        "dl.acm.org",
+        "aclanthology.org",
+        "biorxiv.org",
+        "medrxiv.org",
+        "jstor.org",
+        "pmc.ncbi.nlm.nih.gov",
     }
 )
 
@@ -65,6 +88,9 @@ class Group:
     best_grade: Grade
     primary: bool
     urls: tuple[str, ...]
+    # False only when every member was opened and its quote could not be confirmed
+    # (checked starts with "unchecked"). "" means no source check ran, e.g. in tests.
+    confirmed: bool = True
 
 
 @dataclass(frozen=True)
@@ -134,20 +160,30 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             best_grade="A" if any(e.grade == "A" for e in members) else "B",
             primary=any(e.primary and e.grade == "A" for e in members),
             urls=tuple(e.url for e in members),
+            confirmed=not all(e.checked.startswith("unchecked") for e in members),
         )
         for members in groups.values()
     ]
 
 
-def assess(evidence: list[Evidence]) -> Verdict:
+def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdict:
+    """Apply the rubric.
+
+    Two guards keep a pass honest: path 2 needs a counter-evidence search, and a
+    pass needs at least one deciding source whose quote the code confirmed.
+    Either failing caps the claim at 70 (조건부) instead of 80+.
+    """
     support = independent_groups([e for e in evidence if e.stance == "support"])
     contra = independent_groups([e for e in evidence if e.stance == "contradict"])
     sup, con = len(support), len(contra)
     a_sup = sum(1 for g in support if g.best_grade == "A")
-    primary = any(g.primary for g in support)
+    primary_groups = [g for g in support if g.primary]
 
     def verdict(conf: int, band: tuple[int, int], path: Path, label: str) -> Verdict:
         return Verdict(conf, band, path, label, sup, con)
+
+    def capped(reason: str) -> Verdict:
+        return verdict(70, (60, 79), "none", f"조건부({reason})")
 
     if con > sup:  # 반대 근거 우세
         return verdict(25, (0, 39), "none", "반박됨")
@@ -155,9 +191,17 @@ def assess(evidence: list[Evidence]) -> Verdict:
         return verdict(50, (40, 59), "none", "미확정(출처 간 결론 혼재)")
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")
-    if a_sup >= 2 or primary:
+    a_groups = [g for g in support if g.best_grade == "A"]
+    if a_sup >= 2 or primary_groups:
+        deciding = primary_groups if primary_groups and a_sup < 2 else a_groups
+        if not any(g.confirmed for g in deciding):
+            return capped("인용 미확인")
         return verdict(95, (90, 99), "path1", "사실")
     if sup >= 3:
+        if not counter_searched:
+            return capped("반대 근거 검색 없음")
+        if not any(g.confirmed for g in support):
+            return capped("인용 미확인")
         if a_sup >= 1:
             return verdict(92, (90, 99), "path2", "사실")
         return verdict(85, (80, 89), "path2", "사실(웹 교차 확인)")

@@ -92,7 +92,11 @@ async def missing_models(models: tuple[str, ...] | list[str], timeout_s: float =
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         resp = await client.get(OPENROUTER_MODELS_URL)
         resp.raise_for_status()
-        listed = {m.get("id") for m in resp.json().get("data") or [] if isinstance(m, dict)}
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise httpx.DecodingError("model list is not JSON") from exc
+        listed = {m.get("id") for m in (data.get("data") if isinstance(data, dict) else None) or [] if isinstance(m, dict)}
     return [m for m in models if m not in listed]
 
 

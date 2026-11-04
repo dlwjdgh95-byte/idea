@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any
 
+from .confidence import assess
 from .config import CouncilConfig
 from .llm import LLM
 from .parsing import (
@@ -71,6 +72,7 @@ class CouncilResult:
     checks: list[ClaimCheck]
     synthesis: str
     links: list[dict[str, Any]] = field(default_factory=list)
+    key_claims: list[str] = field(default_factory=list)
     next_questions: list[str] = field(default_factory=list)
     chairman: str = ""
     chairman_error: str | None = None
@@ -190,8 +192,17 @@ class Council:
         key = [str(c["text"]) for a in answers for c in a.claims if _is_true(c.get("key"))]
         return merge_similar(suspect + key)[: self.config.max_claims_to_verify]
 
+    @staticmethod
+    def key_claims(answers: list[MemberAnswer]) -> list[str]:
+        return [str(c["text"]) for a in answers for c in a.claims if _is_true(c.get("key"))]
+
     async def gate(self, claims: list[str], context: str) -> list[ClaimCheck]:
-        return list(await asyncio.gather(*(self.verifier.verify(c, context) for c in claims)))
+        results = await asyncio.gather(*(self.verifier.verify(c, context) for c in claims), return_exceptions=True)
+        return [
+            r if isinstance(r, ClaimCheck)
+            else ClaimCheck(claim=c, verdict=assess([]), error=f"{type(r).__name__}: {r}")
+            for c, r in zip(claims, results)
+        ]
 
     # Stage 3 -----------------------------------------------------------------
     async def stage3(
@@ -251,6 +262,7 @@ class Council:
             checks=checks,
             synthesis=synthesis,
             links=[x for x in extra.get("links") or [] if isinstance(x, dict)],
+            key_claims=self.key_claims(answers),
             next_questions=[str(q) for q in extra.get("next_questions") or []],
             chairman=self.config.chairman,
             chairman_error=error,

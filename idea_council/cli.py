@@ -32,7 +32,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-model-check", action="store_true", help="OpenRouter 모델 목록 확인을 건너뜀")
     args = parser.parse_args(argv)
 
-    config = CouncilConfig.from_env()
+    try:
+        config = CouncilConfig.from_env()
+    except ValueError as exc:
+        sys.stderr.write(f"설정 오류: {exc}\n")
+        return 2
     if not args.skip_model_check:
         try:
             missing = asyncio.run(missing_models(config.all_models()))
@@ -45,7 +49,15 @@ def main(argv: list[str] | None = None) -> int:
                     + "\nCOUNCIL_MODELS, CHAIRMAN_MODEL, VERIFIER_MODEL 환경 변수로 바꾸십시오.\n"
                 )
                 return 2
-    llm = OpenRouterClient(timeout_s=config.timeout_s, web_search_max_results=config.web_search_max_results)
+    try:
+        llm = OpenRouterClient(
+            timeout_s=config.timeout_s,
+            web_search_max_results=config.web_search_max_results,
+            extra_headers=dict(config.extra_headers),
+        )
+    except RuntimeError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
     ideas = [line.strip() for line in _read(args.ideas_file).splitlines() if line.strip()]
     result = asyncio.run(
         Council(llm, config).run(args.question, _read(args.context_file), ideas, verify=not args.no_verify)

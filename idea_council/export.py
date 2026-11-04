@@ -22,6 +22,10 @@ def _role(role: str) -> str:
     return ROLES.get(role, (role, ""))[0]
 
 
+def _cell(text: object) -> str:
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
 def to_markdown(result: CouncilResult) -> str:
     lines = [f"# 카운슬: {result.question}", "", result.synthesis or "(의장 종합 실패)", ""]
     if result.checks:
@@ -29,7 +33,7 @@ def to_markdown(result: CouncilResult) -> str:
         for c in result.checks:
             v = c.verdict
             lines.append(
-                f"| {c.claim} | {v.label} | {v.confidence}% | {PATH_LABEL[v.path]} | "
+                f"| {_cell(c.claim)} | {_cell(v.label)} | {v.confidence}% | {PATH_LABEL[v.path]} | "
                 f"{v.independent_support}/{v.independent_contra} |"
             )
         lines.append("")
@@ -47,8 +51,24 @@ def to_json(result: CouncilResult) -> str:
     return json.dumps(dataclasses.asdict(result), ensure_ascii=False, indent=2, default=str)
 
 
+def _judgement(check: Any) -> str:
+    v = check.verdict
+    if check.error:
+        return "확인 불가"
+    if v.passed:
+        return "지지"
+    if v.label == "반박됨":
+        return "반박"
+    if "혼재" in v.label:
+        return "혼재"
+    if v.label.startswith("조건부"):
+        return "검증 중"  # 60–79%: the rule says keep verifying
+    return "확인 불가"
+
+
 def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -> list[dict[str, Any]]:
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    key = {" ".join(k.lower().split()) for k in result.key_claims}
     rows = []
     for c in result.checks:
         v = c.verdict
@@ -58,9 +78,9 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
         best = min((e.grade for e in counted), default="C")  # best grade among sources that count
         row: dict[str, Any] = {
             "주장": c.claim,
-            "판정": "지지" if v.passed else ("반박" if v.label == "반박됨" else "혼재" if "혼재" in v.label else "확인 불가"),
+            "판정": _judgement(c),
             "확신도(%)": v.confidence / 100,
-            "중요도": "핵심",
+            "중요도": "핵심" if " ".join(c.claim.lower().split()) in key else "보조",
             "검증 경로": PATH_LABEL[v.path],
             "출처 등급": GRADE_LABEL[best],
             "독립 출처 수": v.independent_support,
