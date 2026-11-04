@@ -80,6 +80,15 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "iop.org",
         "aps.org",
         "acpjournals.org",
+        "dbpia.co.kr",
+        "kci.go.kr",
+        "riss.kr",
+        "scienceon.kisti.re.kr",
+        "koreascience.kr",
+        "europepmc.org",
+        "core.ac.uk",
+        "hal.science",
+        "scholar.archive.org",
     }
 )
 
@@ -137,12 +146,12 @@ def _domain(url: str) -> str:
     return host.removeprefix("www.")
 
 
-_DOI = re.compile(r"(10\.\d{4,9}/[^\s?#]+)", re.IGNORECASE)
+_DOI = re.compile(r"(10\.\d{4,9}/[^\s?#&\"'<>]+)", re.IGNORECASE)
 _DOI_TAIL = re.compile(
     r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
     re.IGNORECASE,
 )
-_ARXIV = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.IGNORECASE)
+_ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf)/|:\s*)(\d{4}\.\d{4,5})", re.IGNORECASE)
 
 
 def doi_of(url: str) -> str | None:
@@ -209,17 +218,27 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
         keys = []
         if origin:
             keys.append("origin:" + _norm(origin))
+            # An origin that names a paper (DOI, arXiv id, doi.org link) is that paper, whatever
+            # the wording: news stories about a study share its origin with the study itself.
+            origin_work = work_id(origin)
+            if origin_work:
+                keys.append("work:" + origin_work)
         if op and not _is_platform(op):
             keys.append("op:" + _norm(op))
         # Two pages of the same site share an operator, except on hosting platforms where
         # unrelated authors publish side by side, and except for papers (the work key covers them).
-        wid = item.work or (work_id(item.url) if item.url else None)
+        url_work = work_id(item.url) if item.url else None
         domain = _domain(item.url) if item.url else ""
-        if domain and not wid and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
+        paper = bool(item.work or url_work)
+        if domain and not paper and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
             keys.append("domain:" + domain)
-        # One paper reached through several mirrors (doi.org, publisher, PubMed, ...) is one source.
-        if wid:
-            keys.append("work:" + wid.lower())
+        # One paper reached through several mirrors (doi.org, publisher, PubMed, arXiv, ...) is one
+        # source: the OpenAlex work id and the DOI/arXiv id from the URL both tie them together.
+        for wid in (item.work, url_work):
+            if wid:
+                keys.append("work:" + wid.lower())
+        if item.url:
+            keys.append("url:" + item.url.strip().rstrip("/").lower())  # the same page listed twice
         for key in keys:
             if key in seen:
                 union(seen[key], idx)
@@ -235,7 +254,9 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             primary=any(e.primary and e.grade == "A" for e in members),
             urls=tuple(e.url for e in members),
             confirmed=not all(e.checked.startswith("unchecked") for e in members),
-            shown=any(_field(e.operator) and _field(e.origin) for e in members),
+            shown=any(
+                _field(e.operator) and not _is_platform(_field(e.operator)) and _field(e.origin) for e in members
+            ),
         )
         for members in groups.values()
     ]
@@ -283,6 +304,8 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]
+    if rebuttal_found:  # the counter search reported a rebuttal (perhaps dropped by the source check)
+        return verdict(50, (40, 59), "none", "미확정(반대 근거 검색에서 반박 발견)")
     if not any(g.shown for g in support):
         return verdict(50, (40, 59), "none", "미확정(독립성 미확인)")
     if a_sup >= 2 or primary_groups:
@@ -293,8 +316,6 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
     if sup >= 3:
         if not counter_searched:
             return capped("반대 근거 검색 없음")
-        if rebuttal_found:  # the counter search reported a rebuttal it did not list as evidence
-            return verdict(50, (40, 59), "none", "미확정(반대 근거 검색에서 반박 발견)")
         if not any(g.confirmed for g in support):
             return capped("인용 미확인")
         if a_sup >= 1:

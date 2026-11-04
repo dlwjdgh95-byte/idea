@@ -51,3 +51,9 @@ def test_string_where_a_list_is_expected():
     review = parse_review(text, ["A"])
     assert review.suspect_claims["A"] == ["GPT-5는 2024년에 출시됐다"]
     assert review.ranking == ["A"]
+
+
+def test_bare_json_reply_is_read():
+    assert last_json_block('{"evidence": [], "counter_search": "x"}') == {"evidence": [], "counter_search": "x"}
+    assert last_json_block('설명 {"a": 1}') == {"a": 1}
+    assert last_json_block('{"a": 1} 뒤에 설명') is None

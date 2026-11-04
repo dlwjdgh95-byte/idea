@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_FENCE = re.compile(r"```(?:jsonc?|json5)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _RANK_LINE = re.compile(r"^\s*\d+[.)]\s*(?:응답|Response)\s*([A-Z])\b", re.MULTILINE)
 _ANY_LABEL = re.compile(r"(?:응답|Response)\s*([A-Z])\b")
 SCORE_KEYS = ("accuracy", "evidence", "novelty", "feasibility")
@@ -31,6 +31,18 @@ def last_json_block(text: str) -> dict[str, Any] | None:
             continue
         if isinstance(value, dict):
             return value
+    # No fenced block: accept a reply that is (or ends with) bare JSON.
+    text = (text or "").strip()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, end = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict) and not text[start + end:].strip():
+            return value
+        start = text.find("{", start + 1)
     return None
 
 

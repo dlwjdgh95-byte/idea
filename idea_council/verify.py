@@ -79,9 +79,10 @@ def _text(value: Any) -> str:
 
 
 _NO_SEARCH = (
-    "not performed", "not done", "no search", "did not search", "didn't search", "skipped",
-    "검색 안 함", "검색 안함", "검색하지 않", "검색을 하지 않", "검색을 안", "검색 생략", "검색을 생략",
-    "수행하지 않", "수행 안", "확인하지 않았", "찾아보지 않",
+    "not performed", "not done", "no search was", "no search performed", "no counter search",
+    "did not search", "didn't search", "search skipped", "skipped the search", "skipped counter",
+    "검색 안 함", "검색 안함", "검색하지 않", "검색을 하지 않", "검색을 안 ", "검색 생략", "검색을 생략",
+    "수행하지 않", "수행 안 함", "수행안함", "확인하지 않았", "찾아보지 않",
 )
 _EMPTY = frozenset({"n/a", "na", "none", "null", "-", "없음", "해당 없음"})
 
@@ -175,12 +176,16 @@ def _openalex_abstract(work: dict[str, Any]) -> str:
     return " ".join(words[i] for i in sorted(words))
 
 
+_ARXIV_URL = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.IGNORECASE)
 _PMID = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", re.IGNORECASE)
 _PMCID = re.compile(r"/(PMC\d+)", re.IGNORECASE)
 
 
 def work_lookup(url: str) -> tuple[str, str] | None:
     """(OpenAlex id kind, value) for a paper URL: DOI, PubMed id or PMC id."""
+    arxiv = _ARXIV_URL.search(url)
+    if arxiv:  # OpenAlex knows arXiv papers by their DataCite DOI, which joins them to the journal copy
+        return "doi", "10.48550/arxiv." + arxiv.group(1)
     doi = doi_of(url)
     if doi:
         return "doi", doi
@@ -225,7 +230,11 @@ _META_CHARSET = re.compile(rb"""<meta[^>]+charset=["']?([A-Za-z0-9_\-]+)""", re.
 def _charset(resp: httpx.Response, raw: bytes) -> str:
     """Header charset, else a <meta charset> in the first 4 KB (EUC-KR pages often only declare it there)."""
     if resp.charset_encoding:
-        return resp.charset_encoding
+        try:
+            "".encode(resp.charset_encoding)
+            return resp.charset_encoding
+        except LookupError:
+            pass
     match = _META_CHARSET.search(raw[:4096])
     if match:
         name = match.group(1).decode("ascii", "ignore")
@@ -307,7 +316,7 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         break
     else:
         return None, f"{ev.url}: too many redirects"
-    if status in (401, 403, 429):
+    if status in (401, 403, 429, 503):  # refused, rate-limited or a bot challenge: not seen
         return replace(ev, checked="unchecked: access refused" + note), ""
     if status >= 400:
         return None, f"{ev.url}: HTTP {status}"
@@ -342,7 +351,9 @@ class Verifier:
         completion = await self.llm.complete(self.model, verify_messages(claim, context), web_search=True)
         if not completion.ok:
             return ClaimCheck(claim=claim, verdict=assess([]), error=completion.error)
-        data = last_json_block(completion.text) or {}
+        data = last_json_block(completion.text)
+        if data is None:
+            return ClaimCheck(claim=claim, verdict=assess([]), error="verifier reply had no JSON block")
         evidence = [e for e in (_to_evidence(x) for x in as_list(data.get("evidence")) if isinstance(x, dict)) if e]
         dropped: list[str] = []
         if self.check_urls:

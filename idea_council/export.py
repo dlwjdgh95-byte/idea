@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import re
 from typing import Any
 
 from .council import CouncilResult
@@ -60,7 +61,7 @@ def _judgement(check: Any) -> str:
         return "지지"
     if v.label == "반박됨":
         return "반박"
-    if "혼재" in v.label:
+    if "혼재" in v.label or "반박 발견" in v.label:
         return "혼재"
     if v.label.startswith("조건부"):
         return "검증 중"  # 60–79%: the rule says keep verifying
@@ -81,7 +82,7 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
         row: dict[str, Any] = {
             "주장": c.claim,
             "판정": _judgement(c),
-            "확신도(%)": v.confidence / 100,
+            "확신도(%)": None if c.error else v.confidence / 100,  # a failed check has no confidence
             "중요도": "핵심" if c.key or " ".join(c.claim.lower().split()) in key else "보조",
             "검증 경로": PATH_LABEL[v.path],
             "출처 등급": GRADE_LABEL[best],
@@ -94,6 +95,8 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             "date:검증일:start": today,
             "date:검증일:is_datetime": 0,
         }
+        if row["확신도(%)"] is None:
+            del row["확신도(%)"]
         for i, e in enumerate((support + contra)[:3], start=1):
             row[f"출처 {i}"] = e.url
         if idea_page_url:
@@ -116,6 +119,8 @@ def _number(value: Any) -> float | None:
 
 
 def _link_types(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = re.split(r"[,/·]", value)
     values = value if isinstance(value, list) else [value]
     return [t for t in (str(v).strip() for v in values if v) if t in LINK_TYPES]
 

@@ -124,12 +124,32 @@ def test_one_paper_through_several_mirrors_is_one_source():
     assert v.independent_support == 1 and not v.passed
 
 
-def test_platform_operator_does_not_merge_different_papers():
-    v = assess([
+def test_platform_operator_neither_merges_nor_shows_independence():
+    platform = [
         ev("https://pubmed.ncbi.nlm.nih.gov/1/", "A", operator="PubMed (NLM)", origin="Kim 2020 trial"),
         ev("https://pubmed.ncbi.nlm.nih.gov/2/", "A", operator="PubMed (NLM)", origin="Lee 2022 cohort"),
+    ]
+    assert assess(platform).band == (40, 59)  # operator not really known
+    named = [
+        ev("https://pubmed.ncbi.nlm.nih.gov/1/", "A", operator="Seoul Natl Univ", origin="Kim 2020 trial"),
+        ev("https://pubmed.ncbi.nlm.nih.gov/2/", "A", operator="Yonsei Univ", origin="Lee 2022 cohort"),
+    ]
+    assert assess(named).path == "path1"
+
+
+def test_news_about_a_paper_shares_its_origin():
+    v = assess([
+        ev("https://doi.org/10.1038/s41586-020-2649-2", "A", operator="Harris lab", origin="https://doi.org/10.1038/s41586-020-2649-2"),
+        ev("https://sciencedaily.com/x", operator="ScienceDaily", origin="doi:10.1038/s41586-020-2649-2"),
+        ev("https://phys.org/y", operator="Phys.org", origin="10.1038/s41586-020-2649-2"),
     ])
-    assert v.independent_support == 2 and v.path == "path1"
+    assert v.independent_support == 1
+
+
+def test_same_url_twice_counts_once():
+    v = assess([ev("https://medium.com/@a/post", operator="A", origin="a"),
+                ev("https://medium.com/@a/post/", operator="A author", origin="a post")])
+    assert v.independent_support == 1
 
 
 def test_unknown_sources_do_not_bridge_independent_groups():

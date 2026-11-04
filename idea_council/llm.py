@@ -78,7 +78,8 @@ def _parse_response(model: str, resp: httpx.Response) -> Completion:
         return Completion(model=model, text="", error="unexpected response shape")
     if data.get("error"):  # OpenRouter can report upstream failures inside a 200
         return Completion(model=model, text="", error=f"provider error: {str(data['error'])[:300]}")
-    choice = (data.get("choices") or [{}])[0]
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else {}
     if not isinstance(choice, dict):
         return Completion(model=model, text="", error="unexpected choice shape")
     if choice.get("error"):

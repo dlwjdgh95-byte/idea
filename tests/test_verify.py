@@ -192,3 +192,10 @@ def test_counter_search_phrases():
     assert not counter_searched("반대 근거 검색 안 함")
     assert not counter_searched("not performed")
     assert not counter_searched("N/A")
+
+
+def test_arxiv_urls_resolve_through_openalex_doi_and_amp_params_are_cut():
+    from idea_council.verify import work_lookup
+    assert work_lookup("https://arxiv.org/abs/2006.10256v2") == ("doi", "10.48550/arxiv.2006.10256")
+    assert doi_of("https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0230405&type=printable") \
+        == "10.1371/journal.pone.0230405"

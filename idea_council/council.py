@@ -88,17 +88,6 @@ def _is_true(value: Any) -> bool:
     return value is True or str(value).strip().lower() == "true"
 
 
-def merge_similar(claims: list[str], threshold: float = 0.85) -> list[str]:
-    kept: list[str] = []
-    for claim in claims:
-        if not claim.strip():
-            continue
-        if any(SequenceMatcher(None, _norm(claim), _norm(k)).ratio() >= threshold for k in kept):
-            continue
-        kept.append(claim.strip())
-    return kept
-
-
 def merge_claims(items: list[tuple[str, bool, int]], threshold: float = 0.85) -> list[tuple[str, bool, int]]:
     """Merge near-duplicate claims, keeping the first wording, OR-ing the key flag and summing flags."""
     kept: list[list[Any]] = []
