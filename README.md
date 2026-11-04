@@ -64,7 +64,7 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 
 결과는 `runs/`에 markdown, JSON, Notion 행 payload(`*.notion.json`, 아이디어 허브의 주장·근거 DB와 연결 DB 속성 이름)로 저장됩니다.
 
-환경 변수: `COUNCIL_BACKEND`(`claude-code` 기본·`openrouter`), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`.
+환경 변수: `COUNCIL_BACKEND`(`claude-code`·`mixed`·`openrouter`, Gemini 자격이 있으면 `mixed`가 기본), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`, `AGY_OAUTH_TOKEN_B64`, `AGY_BIN`, `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `GEMINI_MODELS`(쉼표 구분).
 
 역할은 `--out` 폴더의 가장 최근 실행 JSON에서 위원별 역할을 읽어 한 칸씩 밉니다(확장자 → 비판자 → 실행가 → 연결자 → 확장자). 네 번 돌면 모든 모델이 모든 역할을 한 번씩 맡습니다. 이전 실행이 없거나 위원 구성이 바뀌면 무작위로 정합니다.
 
@@ -73,8 +73,23 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 - 로컬 `claude` CLI의 로그인으로 호출합니다. 경로는 `CLAUDE_BIN`으로 바꿀 수 있습니다.
 - 기본 구성은 위원 `opus`·`sonnet`·`haiku`·`fable`(크기가 다른 모델을 한 명씩), 의장 `opus`, 검증자 `sonnet`입니다.
 - 호출마다 단계 프롬프트를 시스템 프롬프트로 쓰고, 도구는 끕니다(검증 단계만 WebSearch·WebFetch). MCP 서버, 설정 파일, 슬래시 명령, 세션 저장도 끄고, 빈 작업 폴더에서 돌려 프로젝트 CLAUDE.md를 읽지 않습니다.
-- 한계: 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
+- 한계(이 백엔드만 쓸 때): 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
 - 네트워크: 검증 게이트는 출처 페이지와 OpenAlex를 직접 엽니다. 외부 사이트가 막힌 환경에서는 출처를 열지 못해 주장이 "근거 부족"으로 남습니다(거짓 통과는 없음).
+
+#### Claude + Gemini 백엔드 (`mixed`)
+
+```bash
+bash scripts/agy_setup.sh   # AGY_OAUTH_TOKEN_B64가 있으면 agy 설치·로그인 토큰 복원(첫 실행 때 자동으로도 부름)
+idea-council "이 아이디어의 가장 약한 고리는?"   # Gemini 자격이 있으면 자동으로 mixed
+```
+
+- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 2명(`GEMINI_MODELS`, 기본 큰 모델 `gemini-4-argon-high`와 작은 모델 `gemini-3.8-flash-high`)을 더한 6명입니다. 의장과 검증자는 Claude 그대로입니다. 쓸 수 있는 id는 `~/.agy-bin/agy models`로 봅니다.
+- Gemini는 두 길로 부릅니다. 먼저 Antigravity CLI(`agy -p`)를 `AGY_OAUTH_TOKEN_B64` 로그인 토큰으로 씁니다(Miner 저장소 `blog/scripts/final_polish.py`와 같은 방식, API 키 불필요). 안 되면 `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`)로 Gemini API를 부릅니다.
+- `agy`는 빈 임시 폴더, `--sandbox`, 최소 환경(프록시·인증서 변수만)에서 돌려 다른 비밀값을 넘기지 않습니다.
+- 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
+- 세션 안 `idea-council` 스킬은 `scripts/agy_ask.sh <모델> <프롬프트 파일>`로 Gemini 위원을 부릅니다(같은 최소 환경·샌드박스).
+- 역할이 4개라 위원 2명은 역할을 겹쳐 맡습니다(의장에게는 "확장자 2"처럼 보임). 순환은 그대로 한 칸씩 돕니다.
+- API 키 경로는 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
 
 #### OpenRouter 백엔드 (선택)
 
