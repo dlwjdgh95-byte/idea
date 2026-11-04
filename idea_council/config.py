@@ -9,6 +9,11 @@ ids that OpenRouter still lists (checked 2026-11-04; the README's
 gemini-3-pro-preview and grok-4 are gone). Those ids go stale, so the CLI
 checks them against OpenRouter's model list before a run. Override any
 model with environment variables.
+
+The ``mixed`` backend seats Gemini (Gemini API, ``GEMINI_API_KEY``) next to
+the four Claude members, so one member comes from another vendor. The
+chairman and verifier stay Claude. The CLI picks it by default when a
+Gemini key is set.
 """
 
 from __future__ import annotations
@@ -29,7 +34,14 @@ OPENROUTER_MEMBERS: tuple[str, ...] = (
 OPENROUTER_CHAIRMAN = "google/gemini-3.1-pro-preview"
 OPENROUTER_VERIFIER = "anthropic/claude-sonnet-5.5"
 
-BACKENDS: tuple[str, ...] = ("claude-code", "openrouter")
+GEMINI_MODEL = "gemini-3.1-pro-preview"
+
+
+def gemini_model() -> str:
+    return os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+
+
+BACKENDS: tuple[str, ...] = ("claude-code", "mixed", "openrouter")
 DEFAULT_BACKEND = "claude-code"
 DEFAULT_MEMBERS, DEFAULT_CHAIRMAN, DEFAULT_VERIFIER = CLAUDE_MEMBERS, CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
 DEFAULT_ROLES: tuple[str, ...] = ("expander", "critic", "builder", "connector")
@@ -77,6 +89,8 @@ class CouncilConfig:
             raise ValueError(f"unknown backend {backend!r}; use one of {', '.join(BACKENDS)}")
         if backend == "openrouter":
             members, chairman, verifier = OPENROUTER_MEMBERS, OPENROUTER_CHAIRMAN, OPENROUTER_VERIFIER
+        elif backend == "mixed":
+            members, chairman, verifier = (*CLAUDE_MEMBERS, gemini_model()), CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
         else:
             members, chairman, verifier = CLAUDE_MEMBERS, CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
         seed = os.environ.get("COUNCIL_SEED")

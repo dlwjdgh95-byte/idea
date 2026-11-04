@@ -16,6 +16,7 @@ from .claude_code import ClaudeCodeClient
 from .config import BACKENDS, DEFAULT_BACKEND, CouncilConfig
 from .council import Council, roles_from_run
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
+from .gemini import GeminiClient, RoutedClient, gemini_key, missing_gemini_models
 from .llm import LLM, OpenRouterClient, missing_models
 
 
@@ -44,12 +45,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idea-url", help="Notion 아이디어 페이지 URL(행 payload에 넣음)")
     parser.add_argument("--out", default="runs", help="결과 저장 폴더")
     parser.add_argument("--no-verify", action="store_true", help="사실 검증 게이트를 건너뜀")
-    parser.add_argument("--skip-model-check", action="store_true", help="OpenRouter 모델 목록 확인을 건너뜀")
+    parser.add_argument("--skip-model-check", action="store_true", help="OpenRouter·Gemini 모델 목록 확인을 건너뜀")
     parser.add_argument(
         "--backend",
         choices=BACKENDS,
-        default=os.environ.get("COUNCIL_BACKEND") or DEFAULT_BACKEND,
-        help="claude-code(기본, 로컬 claude CLI, 키 불필요) 또는 openrouter(여러 회사 모델, 키 필요)",
+        default=os.environ.get("COUNCIL_BACKEND") or ("mixed" if gemini_key() else DEFAULT_BACKEND),
+        help=(
+            "claude-code(로컬 claude CLI, 키 불필요), mixed(Claude 4명 + Gemini 1명, GEMINI_API_KEY 필요, "
+            "키가 있으면 기본), openrouter(여러 회사 모델, 키 필요)"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -76,10 +80,27 @@ def main(argv: list[str] | None = None) -> int:
                     + "\nCOUNCIL_MODELS, CHAIRMAN_MODEL, VERIFIER_MODEL 환경 변수로 바꾸십시오.\n"
                 )
                 return 2
+    if args.backend == "mixed" and not args.skip_model_check and gemini_key():
+        try:
+            missing = asyncio.run(missing_gemini_models(config.all_models()))
+        except httpx.HTTPError as exc:
+            sys.stderr.write(f"경고: Gemini 모델 목록을 확인하지 못했습니다({exc}). 그대로 진행합니다.\n")
+        else:
+            if missing:
+                sys.stderr.write(
+                    "Gemini API에 없는 모델입니다: " + ", ".join(missing)
+                    + "\nGEMINI_MODEL 환경 변수로 바꾸십시오.\n"
+                )
+                return 2
     llm: LLM
     try:
         if args.backend == "claude-code":
             llm = ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0))
+        elif args.backend == "mixed":
+            llm = RoutedClient(
+                ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0)),
+                GeminiClient(timeout_s=config.timeout_s),
+            )
         else:
             llm = OpenRouterClient(
                 timeout_s=config.timeout_s,

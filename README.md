@@ -64,7 +64,7 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 
 결과는 `runs/`에 markdown, JSON, Notion 행 payload(`*.notion.json`, 아이디어 허브의 주장·근거 DB와 연결 DB 속성 이름)로 저장됩니다.
 
-환경 변수: `COUNCIL_BACKEND`(`claude-code` 기본·`openrouter`), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`.
+환경 변수: `COUNCIL_BACKEND`(`claude-code`·`mixed`·`openrouter`, Gemini 키가 있으면 `mixed`가 기본), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`, `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`), `GEMINI_MODEL`.
 
 역할은 `--out` 폴더의 가장 최근 실행 JSON에서 위원별 역할을 읽어 한 칸씩 밉니다(확장자 → 비판자 → 실행가 → 연결자 → 확장자). 네 번 돌면 모든 모델이 모든 역할을 한 번씩 맡습니다. 이전 실행이 없거나 위원 구성이 바뀌면 무작위로 정합니다.
 
@@ -73,8 +73,21 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 - 로컬 `claude` CLI의 로그인으로 호출합니다. 경로는 `CLAUDE_BIN`으로 바꿀 수 있습니다.
 - 기본 구성은 위원 `opus`·`sonnet`·`haiku`·`fable`(크기가 다른 모델을 한 명씩), 의장 `opus`, 검증자 `sonnet`입니다.
 - 호출마다 단계 프롬프트를 시스템 프롬프트로 쓰고, 도구는 끕니다(검증 단계만 WebSearch·WebFetch). MCP 서버, 설정 파일, 슬래시 명령, 세션 저장도 끄고, 빈 작업 폴더에서 돌려 프로젝트 CLAUDE.md를 읽지 않습니다.
-- 한계: 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
+- 한계(이 백엔드만 쓸 때): 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
 - 네트워크: 검증 게이트는 출처 페이지와 OpenAlex를 직접 엽니다. 외부 사이트가 막힌 환경에서는 출처를 열지 못해 주장이 "근거 부족"으로 남습니다(거짓 통과는 없음).
+
+#### Claude + Gemini 백엔드 (`mixed`)
+
+```bash
+export GEMINI_API_KEY=...   # 클라우드 세션에서는 환경 설정의 비밀값으로 넣습니다
+idea-council "이 아이디어의 가장 약한 고리는?"   # 키가 있으면 자동으로 mixed
+```
+
+- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 1명(`GEMINI_MODEL`, 기본 `gemini-3.1-pro-preview`)을 더한 5명입니다. 의장과 검증자는 Claude 그대로입니다.
+- Gemini는 Gemini API(`generateContent`)를 키로 직접 부릅니다. 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
+- 역할이 4개라 다섯 번째 위원은 한 역할을 겹쳐 맡습니다(의장에게는 "확장자 2"처럼 보임). 순환은 그대로 한 칸씩 돕니다.
+- 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
+- Claude 계열만 있을 때의 한계(다른 회사 모델이 없음)를 위원 한 자리만큼 메웁니다.
 
 #### OpenRouter 백엔드 (선택)
 
