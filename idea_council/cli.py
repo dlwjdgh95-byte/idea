@@ -13,7 +13,7 @@ import sys
 import httpx
 
 from .claude_code import ClaudeCodeClient
-from .config import BACKENDS, CouncilConfig
+from .config import BACKENDS, DEFAULT_BACKEND, CouncilConfig
 from .council import Council, roles_from_run
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
 from .llm import LLM, OpenRouterClient, missing_models
@@ -48,8 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--backend",
         choices=BACKENDS,
-        default=os.environ.get("COUNCIL_BACKEND") or "openrouter",
-        help="openrouter(여러 회사 모델, 키 필요) 또는 claude-code(로컬 claude CLI, 키 불필요)",
+        default=os.environ.get("COUNCIL_BACKEND") or DEFAULT_BACKEND,
+        help="claude-code(기본, 로컬 claude CLI, 키 불필요) 또는 openrouter(여러 회사 모델, 키 필요)",
     )
     args = parser.parse_args(argv)
 

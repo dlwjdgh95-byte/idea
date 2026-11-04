@@ -2,8 +2,9 @@
 
 The CLI uses its own sign-in, so no API key is needed. Only Claude models are
 available, which removes the cross-vendor diversity the OpenRouter line-up
-has. The default line-up mixes model sizes instead, and the council rotates
-roles and hides model names from the chairman.
+has. The default line-up (``config.CLAUDE_MEMBERS``) mixes model sizes
+instead, and the council rotates roles and hides model names from the
+chairman. This is the default backend.
 
 Each call is one headless session with:
 
@@ -24,9 +25,6 @@ from typing import Any
 
 from .llm import Completion
 
-CLAUDE_MEMBERS: tuple[str, ...] = ("opus", "sonnet", "haiku", "fable")
-CLAUDE_CHAIRMAN = "opus"
-CLAUDE_VERIFIER = "sonnet"
 WEB_TOOLS = "WebSearch,WebFetch"
 MAX_SYSTEM_PROMPT_CHARS = 100_000  # stays well under Linux's 128 KiB limit for one argument
 

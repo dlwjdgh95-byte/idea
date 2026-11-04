@@ -4,14 +4,9 @@ import random
 import sys
 import textwrap
 
-from idea_council.claude_code import (
-    CLAUDE_MEMBERS,
-    ClaudeCodeClient,
-    parse_cli_output,
-    render_messages,
-)
+from idea_council.claude_code import ClaudeCodeClient, parse_cli_output, render_messages
 from idea_council.cli import previous_roles
-from idea_council.config import CouncilConfig
+from idea_council.config import CLAUDE_MEMBERS, OPENROUTER_MEMBERS, CouncilConfig
 from idea_council.council import Council, roles_from_run
 from idea_council.llm import Completion
 from idea_council.verify import Verifier
@@ -99,6 +94,14 @@ def test_claude_code_defaults_mix_model_sizes(monkeypatch):
     config = CouncilConfig.from_env("claude-code")
     assert config.members == CLAUDE_MEMBERS
     assert {"opus", "sonnet", "haiku"} <= set(config.members)
+
+
+def test_the_council_runs_inside_claude_by_default(monkeypatch):
+    for var in ("COUNCIL_MODELS", "CHAIRMAN_MODEL", "VERIFIER_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    assert CouncilConfig().members == CLAUDE_MEMBERS
+    assert CouncilConfig.from_env().members == CLAUDE_MEMBERS
+    assert CouncilConfig.from_env("openrouter").members == OPENROUTER_MEMBERS
 
 
 def test_roles_rotate_one_step_from_the_previous_run():

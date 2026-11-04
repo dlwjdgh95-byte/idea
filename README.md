@@ -55,32 +55,38 @@ LLM 판정자의 알려진 약점을 막는 장치와 사실 검증 게이트를
 
 ### 실행
 
+카운슬은 Claude 안에서 돕니다. 이 프로젝트에서 실제로 쓰는 경로는 Claude 세션 안의 `idea-council` 스킬(Agent 도구로 위원을 띄움)이고, 이 패키지는 같은 절차의 코드 버전입니다. 코드도 기본은 로컬 `claude` CLI(`claude -p`)를 쓰므로 API 키가 필요 없습니다.
+
 ```bash
 uv venv && uv pip install -e '.[dev]'
-export OPENROUTER_API_KEY=...
 idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.md --ideas-file ideas.txt
 ```
 
 결과는 `runs/`에 markdown, JSON, Notion 행 payload(`*.notion.json`, 아이디어 허브의 주장·근거 DB와 연결 DB 속성 이름)로 저장됩니다.
 
-환경 변수: `COUNCIL_BACKEND`(`openrouter`·`claude-code`), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`.
+환경 변수: `COUNCIL_BACKEND`(`claude-code` 기본·`openrouter`), `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`, `CLAUDE_BIN`.
 
 역할은 `--out` 폴더의 가장 최근 실행 JSON에서 위원별 역할을 읽어 한 칸씩 밉니다(확장자 → 비판자 → 실행가 → 연결자 → 확장자). 네 번 돌면 모든 모델이 모든 역할을 한 번씩 맡습니다. 이전 실행이 없거나 위원 구성이 바뀌면 무작위로 정합니다.
-기본 모델은 llm-council README와 같은 구성(OpenAI·Google·Anthropic·xAI 각 1개, 의장 Gemini)이되, README의 `gemini-3-pro-preview`와 `grok-4`가 OpenRouter에서 내려가 2026-11-04 기준 목록에 있는 id로 바꿨습니다.
-모델 id는 자주 바뀌므로 실행 전에 OpenRouter 모델 목록과 대조하고, 없는 id가 있으면 바로 멈춥니다(`--skip-model-check`로 건너뜀).
-웹 검색은 OpenRouter의 `openrouter:web_search` 서버 도구를 씁니다.
 
-### OpenRouter 없이 실행 (Claude Code CLI)
+#### Claude 백엔드 (기본)
 
-```bash
-idea-council "이 아이디어의 가장 약한 고리는?" --backend claude-code --context-file card.md
-```
-
-- 로컬 `claude` CLI의 로그인으로 `claude -p`를 호출하므로 API 키가 필요 없습니다. 경로는 `CLAUDE_BIN`으로 바꿀 수 있습니다.
+- 로컬 `claude` CLI의 로그인으로 호출합니다. 경로는 `CLAUDE_BIN`으로 바꿀 수 있습니다.
 - 기본 구성은 위원 `opus`·`sonnet`·`haiku`·`fable`(크기가 다른 모델을 한 명씩), 의장 `opus`, 검증자 `sonnet`입니다.
 - 호출마다 단계 프롬프트를 시스템 프롬프트로 쓰고, 도구는 끕니다(검증 단계만 WebSearch·WebFetch). MCP 서버, 설정 파일, 슬래시 명령, 세션 저장도 끄고, 빈 작업 폴더에서 돌려 프로젝트 CLAUDE.md를 읽지 않습니다.
 - 한계: 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
 - 네트워크: 검증 게이트는 출처 페이지와 OpenAlex를 직접 엽니다. 외부 사이트가 막힌 환경에서는 출처를 열지 못해 주장이 "근거 부족"으로 남습니다(거짓 통과는 없음).
+
+#### OpenRouter 백엔드 (선택)
+
+```bash
+export OPENROUTER_API_KEY=...
+idea-council "이 아이디어의 가장 약한 고리는?" --backend openrouter
+```
+
+- 기본 모델은 llm-council README와 같은 구성(OpenAI·Google·Anthropic·xAI 각 1개, 의장 Gemini)이되, README의 `gemini-3-pro-preview`와 `grok-4`가 OpenRouter에서 내려가 2026-11-04 기준 목록에 있는 id로 바꿨습니다.
+- 모델 id는 자주 바뀌므로 실행 전에 OpenRouter 모델 목록과 대조하고, 없는 id가 있으면 바로 멈춥니다(`--skip-model-check`로 건너뜀).
+- 웹 검색은 OpenRouter의 `openrouter:web_search` 서버 도구를 씁니다.
+- 실제 OpenRouter 호출은 키가 없어 확인하지 않았습니다.
 
 ### 설계 근거
 
