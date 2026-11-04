@@ -1,0 +1,57 @@
+"""Command line entry point: ``idea-council "질문" --context-file card.md``."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as dt
+import json
+import pathlib
+import sys
+
+from .config import CouncilConfig
+from .council import Council
+from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
+from .llm import OpenRouterClient
+
+
+def _read(path: str | None) -> str:
+    return pathlib.Path(path).read_text(encoding="utf-8") if path else ""
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="idea-council", description="LLM 카운슬로 아이디어를 전개합니다.")
+    parser.add_argument("question", help="카운슬에 던질 질문")
+    parser.add_argument("--context-file", help="아이디어 스레드의 맥락 카드(markdown)")
+    parser.add_argument("--ideas-file", help="다른 아이디어 목록, 한 줄에 하나")
+    parser.add_argument("--idea-url", help="Notion 아이디어 페이지 URL(행 payload에 넣음)")
+    parser.add_argument("--out", default="runs", help="결과 저장 폴더")
+    parser.add_argument("--no-verify", action="store_true", help="사실 검증 게이트를 건너뜀")
+    args = parser.parse_args(argv)
+
+    config = CouncilConfig.from_env()
+    llm = OpenRouterClient(timeout_s=config.timeout_s, web_search_max_results=config.web_search_max_results)
+    ideas = [line.strip() for line in _read(args.ideas_file).splitlines() if line.strip()]
+    result = asyncio.run(
+        Council(llm, config).run(args.question, _read(args.context_file), ideas, verify=not args.no_verify)
+    )
+
+    out = pathlib.Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    (out / f"{stamp}.md").write_text(to_markdown(result), encoding="utf-8")
+    (out / f"{stamp}.json").write_text(to_json(result), encoding="utf-8")
+    (out / f"{stamp}.notion.json").write_text(
+        json.dumps(
+            {"claims": notion_claim_rows(result, args.idea_url), "links": notion_link_rows(result, args.idea_url)},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    sys.stdout.write(to_markdown(result) + "\n")
+    return 1 if result.chairman_error else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

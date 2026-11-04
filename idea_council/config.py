@@ -1,0 +1,63 @@
+"""Council configuration.
+
+Default member/chairman model ids follow the example config in
+karpathy/llm-council's README. All of them can be overridden with
+environment variables so the council can track newer models.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+DEFAULT_MEMBERS: tuple[str, ...] = (
+    "openai/gpt-5.1",
+    "google/gemini-3-pro-preview",
+    "anthropic/claude-sonnet-4.5",
+    "x-ai/grok-4",
+)
+DEFAULT_CHAIRMAN = "google/gemini-3-pro-preview"
+DEFAULT_VERIFIER = "anthropic/claude-sonnet-4.5"
+DEFAULT_ROLES: tuple[str, ...] = ("expander", "critic", "builder", "connector")
+
+
+def _split(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+@dataclass(frozen=True)
+class CouncilConfig:
+    members: tuple[str, ...] = DEFAULT_MEMBERS
+    chairman: str = DEFAULT_CHAIRMAN
+    verifier: str = DEFAULT_VERIFIER
+    roles: tuple[str, ...] = DEFAULT_ROLES
+    # Shuffle which model gets which role on every run, so a model's
+    # ranking is not confounded with the role it always plays.
+    rotate_roles: bool = True
+    max_claims_to_verify: int = 8
+    web_search_max_results: int = 5
+    check_source_urls: bool = True
+    seed: int | None = None
+    timeout_s: float = 180.0
+    extra_headers: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if len(self.members) < 2:
+            raise ValueError("a council needs at least two members")
+        if not self.roles:
+            raise ValueError("at least one role is required")
+
+    @classmethod
+    def from_env(cls) -> CouncilConfig:
+        seed = os.environ.get("COUNCIL_SEED")
+        return cls(
+            members=_split(os.environ.get("COUNCIL_MODELS")) or DEFAULT_MEMBERS,
+            chairman=os.environ.get("CHAIRMAN_MODEL") or DEFAULT_CHAIRMAN,
+            verifier=os.environ.get("VERIFIER_MODEL") or DEFAULT_VERIFIER,
+            roles=_split(os.environ.get("COUNCIL_ROLES")) or DEFAULT_ROLES,
+            rotate_roles=os.environ.get("COUNCIL_ROTATE_ROLES", "1") != "0",
+            max_claims_to_verify=int(os.environ.get("COUNCIL_MAX_CLAIMS", "8")),
+            seed=int(seed) if seed else None,
+        )
