@@ -84,24 +84,37 @@ FINAL RANKING:
 def verify_messages(claim: str, context: str) -> list[dict[str, str]]:
     system = """당신은 사실 검증자입니다. 웹 검색으로 아래 주장을 검증하십시오.
 규칙:
-- 검색 요약이 아니라 원문을 열어 해당 구절을 찾으십시오. 열어 보지 않은 출처는 쓰지 마십시오.
+- 검색 결과에 실제로 나온 URL만 쓰십시오. 지어낸 URL이나 기억 속 URL은 쓰지 마십시오.
+- quote에는 그 페이지 원문의 구절을 원문 언어 그대로, 한 글자도 바꾸지 말고 공백·문장부호를 빼고 20자 이상 옮기십시오. 번역·요약·의역하지 마십시오. 코드가 페이지를 직접 열어 이 구절이 있는지 확인하고, 없으면 그 출처를 버립니다.
 - 반대 근거를 일부러 한 번 더 검색하십시오.
 - 출처마다 등급을 매기십시오.
   A: 동료심사 논문(특히 체계적 문헌고찰·메타분석), 정부·국제기구 공식 통계, 1차 자료(공식 문서·공시·표준·법령)
   B: 운영 주체가 분명하고 편집·정정 책임이 있는 웹 자료(주요 언론, 전문 매체, 기관·기업 공식 블로그, 업계 보고서, 프리프린트, 실명 전문가 글)
   C: 익명 글, 출처 없는 요약·재가공 글, AI 생성 글, 콘텐츠 농장
-- 출처마다 운영 주체(operator)와 원출처(origin: 그 글이 옮겨 온 보도자료·원문·통신사 기사 등, 직접 취재면 자기 URL)를 적으십시오.
+- 출처마다 운영 주체(operator)와 원출처(origin)를 적으십시오.
+  operator: 그 내용을 책임지는 주체입니다. 기사는 언론사, 논문은 저자 소속 기관이나 연구 그룹(PubMed·arXiv·출판사 같은 게재 플랫폼이 아님), 공식 자료는 발행 기관입니다.
+  origin: 그 글이 옮겨 온 원자료(보도자료, 통신사 기사, 원 논문 등)입니다. 원자료가 논문이면 반드시 DOI(예: 10.1038/...)나 arXiv id로 쓰십시오. 논문을 소개한 기사도 그 논문의 DOI를 origin으로 씁니다. 직접 취재라면 그 글 자체를 가리키는 이름을 쓰십시오.
+  같은 논문을 여러 사이트에서 찾았다면 하나만 적으십시오.
 - 주장이 맞을 때 이익을 보는 당사자의 자료면 conflict_of_interest를 true로 하십시오.
+- stance는 "support"(주장을 지지), "contradict"(주장을 반박·부정), "neutral"(관련은 있으나 판단 근거 아님) 중 하나만 쓰십시오. 반대 근거는 반드시 "contradict"로 적으십시오.
+- primary는 공식 문서·통계표·법령·공시·표준 그 자체일 때만 true입니다. 연구 논문은 동료심사를 거쳤어도 primary가 아닙니다(등급 A, primary false).
+- counter_search에는 실제로 실행한 반대 근거 검색어와 결과를 쓰십시오. 비워 두면 경로 2로 통과할 수 없습니다.
+- 반대 근거 검색에서 주장을 반박하는 A·B 등급 자료(이해 상충 없음)를 찾았다면 rebuttal_found를 true로 하고, 그 자료를 evidence에 "contradict"로 넣으십시오. C 등급 반박만 있으면 false로 두고 evidence에만 넣으십시오.
 - 확신도는 계산하지 마십시오. 증거만 정확히 적으십시오.
 
 답은 아래 JSON 블록 하나만 쓰십시오.
 ```json
-{"evidence": [{"url": "https://...", "grade": "A", "stance": "support", "operator": "...", "origin": "...", "primary": false, "conflict_of_interest": false, "quote": "원문 구절"}],
+{"evidence": [{"url": "https://...", "grade": "A", "stance": "support", "operator": "...", "origin": "...", "primary": false, "conflict_of_interest": false, "quote": "원문 구절"},
+              {"url": "https://...", "grade": "B", "stance": "contradict", "operator": "...", "origin": "...", "primary": false, "conflict_of_interest": false, "quote": "반대 내용의 원문 구절"}],
  "counter_search": "반대 근거를 어떤 검색어로 찾았고 무엇이 나왔는지 한 줄",
+ "rebuttal_found": false,
  "notes": "한계나 조건 한 줄"}
 ```"""
     user = f"## 주장\n{claim}\n\n## 맥락\n{context or '(없음)'}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+LINK_TYPES: tuple[str, ...] = ("같은 메커니즘", "같은 문제", "같은 근거", "상충", "결합하면 새 아이디어", "유추")
 
 
 def stage3_messages(
@@ -119,6 +132,7 @@ def stage3_messages(
 - 검증하지 않은 핵심 사실은 사실로 쓰지 마십시오.
 - 다수 의견에 묻히는 좋은 소수 의견은 따로 남기십시오.
 - 한국어로, 간결하게 쓰십시오."""
+    link_types = ", ".join(f'"{t}"' for t in LINK_TYPES)
     user = f"""## 질문
 {question}
 
@@ -145,8 +159,9 @@ def stage3_messages(
 ### 다음 질문
 
 맨 끝에 아래 JSON 블록을 하나 붙이십시오. links는 다른 아이디어와의 연결 후보입니다(없으면 빈 배열).
+type은 {link_types} 중에서만 고르십시오(여러 개면 배열). strength는 0~100 정수이며, 공유 근거나 같은 메커니즘이 확인되지 않은 표면적 유사성은 40 이하로 두십시오.
 ```json
-{{"links": [{{"idea": "연결되는 다른 아이디어", "insight": "왜 연결되는지 한 문장", "type": "같은 메커니즘", "strength": 60}}],
+{{"links": [{{"idea": "연결되는 다른 아이디어", "insight": "왜 연결되는지 한 문장", "type": ["같은 메커니즘"], "strength": 60, "question": "이 연결로 다음에 물을 질문"}}],
  "next_questions": ["..."]}}
 ```"""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

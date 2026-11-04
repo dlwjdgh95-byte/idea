@@ -1,8 +1,10 @@
 """Council configuration.
 
-Default member/chairman model ids follow the example config in
-karpathy/llm-council's README. All of them can be overridden with
-environment variables so the council can track newer models.
+Defaults keep karpathy/llm-council's line-up (one model each from OpenAI,
+Google, Anthropic and xAI, Gemini as chairman) but use ids that OpenRouter
+still lists (checked 2026-11-04; the README's gemini-3-pro-preview and
+grok-4 are gone). Model ids go stale, so the CLI checks them against
+OpenRouter's model list before a run. Override with environment variables.
 """
 
 from __future__ import annotations
@@ -11,13 +13,13 @@ import os
 from dataclasses import dataclass, field
 
 DEFAULT_MEMBERS: tuple[str, ...] = (
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
+    "openai/gpt-5.5",
+    "google/gemini-3.1-pro-preview",
+    "anthropic/claude-sonnet-5.5",
+    "x-ai/grok-4.7",
 )
-DEFAULT_CHAIRMAN = "google/gemini-3-pro-preview"
-DEFAULT_VERIFIER = "anthropic/claude-sonnet-4.5"
+DEFAULT_CHAIRMAN = "google/gemini-3.1-pro-preview"
+DEFAULT_VERIFIER = "anthropic/claude-sonnet-5.5"
 DEFAULT_ROLES: tuple[str, ...] = ("expander", "critic", "builder", "connector")
 
 
@@ -48,6 +50,13 @@ class CouncilConfig:
             raise ValueError("a council needs at least two members")
         if not self.roles:
             raise ValueError("at least one role is required")
+        if self.max_claims_to_verify < 1:
+            raise ValueError("COUNCIL_MAX_CLAIMS must be 1 or more (use --no-verify to skip the gate)")
+        if len(set(self.members)) != len(self.members):
+            raise ValueError("council members must be distinct model ids")
+
+    def all_models(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.members, self.chairman, self.verifier)))
 
     @classmethod
     def from_env(cls) -> CouncilConfig:

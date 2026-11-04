@@ -13,16 +13,19 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import string
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
+from itertools import zip_longest
 from typing import Any
 
+from .confidence import assess
 from .config import CouncilConfig
 from .llm import LLM
 from .parsing import (
     SCORE_KEYS,
     Review,
+    as_list,
     last_json_block,
     parse_review,
     strip_json_blocks,
@@ -57,7 +60,7 @@ class ReviewRecord:
 class Standing:
     member: str
     role: str
-    average_rank: float
+    average_rank: float | None  # None when no reviewer ranked this member
     rankings_count: int
     mean_scores: dict[str, float]
 
@@ -71,6 +74,7 @@ class CouncilResult:
     checks: list[ClaimCheck]
     synthesis: str
     links: list[dict[str, Any]] = field(default_factory=list)
+    key_claims: list[str] = field(default_factory=list)
     next_questions: list[str] = field(default_factory=list)
     chairman: str = ""
     chairman_error: str | None = None
@@ -80,15 +84,63 @@ def _norm(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def merge_similar(claims: list[str], threshold: float = 0.85) -> list[str]:
-    kept: list[str] = []
-    for claim in claims:
-        if not claim.strip():
+def _is_true(value: Any) -> bool:
+    return value is True or str(value).strip().lower() == "true"
+
+
+_PUNCT = re.compile(r"[\W_]+", re.UNICODE)
+
+
+_NEGATION = re.compile(r"\b(?:not|no|never|false|untrue|myth|wrong|isn't|doesn't)\b|아니|않|없|거짓|틀리|틀렸|사실이 아", re.IGNORECASE)
+
+
+_SCOPE = re.compile(
+    r"\b(?:mice|mouse|rats?|animals?|vitro|vivo|cells?|only|briefly|temporarily|some|partly|partially|may|might|"
+    r"children|women|men|elderly|adults)\b|동물|쥐|세포|일부|일시|단기|만\b|아동|여성|남성|노인|성인|가능성",
+    re.IGNORECASE,
+)
+
+
+def _extra_words(a: str, b: str) -> str:
+    """The words one wording adds to the other (in original form, for the negation check)."""
+    wa, wb = a.lower().split(), b.lower().split()
+    short, long = sorted((wa, wb), key=len)
+    return " ".join(w for w in long if w not in short)
+
+
+def _same_claim(a: str, b: str) -> bool:
+    """Only true duplicates: equal apart from case, spacing and punctuation, or one wording contained in
+    the other with little added. Fuzzy similarity would join claims that differ in one name or number
+    ("Germany" vs "France"), which is exactly the disagreement worth checking."""
+    x, y = _PUNCT.sub("", a.lower()), _PUNCT.sub("", b.lower())
+    if not x or not y:
+        return False
+    if x == y:
+        return True
+    short, long = sorted((x, y), key=len)
+    if short not in long or len(short) < 0.85 * len(long):
+        return False
+    extra = long.replace(short, "", 1)
+    if any(ch.isdigit() for ch in extra):  # "50%" vs "50% in 2020" are different claims
+        return False
+    extra_words = _extra_words(a, b)
+    return not (_NEGATION.search(extra_words) or _SCOPE.search(extra_words))  # "X" vs "not X" / "X in mice"
+
+
+def merge_claims(items: list[tuple[str, bool, int]]) -> list[tuple[str, bool, int]]:
+    """Merge near-duplicate claims, keeping the first wording, OR-ing the key flag and summing flags."""
+    kept: list[list[Any]] = []
+    for text, is_key, flags in items:
+        if not text.strip():
             continue
-        if any(SequenceMatcher(None, _norm(claim), _norm(k)).ratio() >= threshold for k in kept):
-            continue
-        kept.append(claim.strip())
-    return kept
+        for k in kept:
+            if _same_claim(text, k[0]):
+                k[1] = k[1] or is_key
+                k[2] += flags
+                break
+        else:
+            kept.append([text.strip(), is_key, flags])
+    return [(t, bool(k), int(f)) for t, k, f in kept]
 
 
 def aggregate(reviews: list[ReviewRecord], answers: list[MemberAnswer]) -> list[Standing]:
@@ -110,13 +162,13 @@ def aggregate(reviews: list[ReviewRecord], answers: list[MemberAnswer]) -> list[
         Standing(
             member=member,
             role=roles[member],
-            average_rank=round(sum(p) / len(p), 2) if p else float("inf"),
+            average_rank=round(sum(p) / len(p), 2) if p else None,
             rankings_count=len(p),
             mean_scores={k: round(sum(v) / len(v), 2) for k, v in scores[member].items() if v},
         )
         for member, p in positions.items()
     ]
-    return sorted(standings, key=lambda s: s.average_rank)
+    return sorted(standings, key=lambda s: (s.average_rank is None, s.average_rank or 0.0))
 
 
 class Council:
@@ -146,10 +198,14 @@ class Council:
         async def ask(member: str, role: str) -> MemberAnswer:
             completion = await self.llm.complete(member, stage1_messages(question, context, role, other_ideas))
             data = last_json_block(completion.text) or {}
-            claims = [c for c in data.get("claims") or [] if isinstance(c, dict) and c.get("text")]
+            claims = [c for c in as_list(data.get("claims")) if isinstance(c, dict) and isinstance(c.get("text"), str)]
             return MemberAnswer(member, role, strip_json_blocks(completion.text), claims, completion.error)
 
-        return list(await asyncio.gather(*(ask(m, r) for m, r in assignment)))
+        results = await asyncio.gather(*(ask(m, r) for m, r in assignment), return_exceptions=True)
+        return [
+            r if isinstance(r, MemberAnswer) else MemberAnswer(m, role, "", error=f"{type(r).__name__}: {r}")
+            for (m, role), r in zip(assignment, results)
+        ]
 
     # Stage 2 -----------------------------------------------------------------
     async def stage2(self, question: str, answers: list[MemberAnswer]) -> list[ReviewRecord]:
@@ -172,22 +228,42 @@ class Council:
 
         if len(valid) < 2:
             return []
-        return list(await asyncio.gather(*(review(r) for r in valid)))
+        results = await asyncio.gather(*(review(r) for r in valid), return_exceptions=True)
+        return [r for r in results if isinstance(r, ReviewRecord)]  # a crashed reviewer just casts no vote
 
     # Stage 2.5 ---------------------------------------------------------------
     def claims_to_verify(self, answers: list[MemberAnswer], reviews: list[ReviewRecord]) -> list[str]:
-        """Suspect claims first (most flagged first), then key claims, near-duplicates merged."""
+        """Pick claims for the gate: those both key and flagged first, then suspect and key claims
+        taken in turn so neither kind crowds out the other. Near-duplicates are merged."""
+        return [text for text, _ in self.select_claims(answers, reviews)]
+
+    def select_claims(self, answers: list[MemberAnswer], reviews: list[ReviewRecord]) -> list[tuple[str, bool]]:
         flagged: dict[str, int] = {}
         for record in reviews:
             for claims in record.review.suspect_claims.values():
                 for claim in claims:
                     flagged[claim] = flagged.get(claim, 0) + 1
-        suspect = sorted(flagged, key=lambda c: -flagged[c])
-        key = [str(c["text"]) for a in answers for c in a.claims if c.get("key")]
-        return merge_similar(suspect + key)[: self.config.max_claims_to_verify]
+        key_texts = self.key_claims(answers)
+        merged = merge_claims([(c, False, n) for c, n in flagged.items()] + [(c, True, 0) for c in key_texts])
+        both = sorted((m for m in merged if m[1] and m[2]), key=lambda m: -m[2])
+        suspect = sorted((m for m in merged if not m[1]), key=lambda m: -m[2])
+        key_only = [m for m in merged if m[1] and not m[2]]
+        ordered = list(both)
+        for pair in zip_longest(suspect, key_only):
+            ordered.extend(m for m in pair if m is not None)
+        return [(text, is_key) for text, is_key, _ in ordered[: self.config.max_claims_to_verify]]
+
+    @staticmethod
+    def key_claims(answers: list[MemberAnswer]) -> list[str]:
+        return [str(c["text"]) for a in answers for c in a.claims if _is_true(c.get("key"))]
 
     async def gate(self, claims: list[str], context: str) -> list[ClaimCheck]:
-        return list(await asyncio.gather(*(self.verifier.verify(c, context) for c in claims)))
+        results = await asyncio.gather(*(self.verifier.verify(c, context) for c in claims), return_exceptions=True)
+        return [
+            r if isinstance(r, ClaimCheck)
+            else ClaimCheck(claim=c, verdict=assess([]), error=f"{type(r).__name__}: {r}")
+            for c, r in zip(claims, results)
+        ]
 
     # Stage 3 -----------------------------------------------------------------
     async def stage3(
@@ -214,7 +290,9 @@ class Council:
                 if critique:
                     review_lines.append(f"- {record.reviewer} → {target}: {critique}")
         checks_block = "\n".join(
-            f"- {c.claim} | {c.verdict.label} | {c.verdict.confidence}% | 경로 {c.verdict.path} | "
+            f"- {c.claim} | 검증 실패({c.error}) | 사실로 쓰지 말 것"
+            if c.error
+            else f"- {c.claim} | {c.verdict.label} | {c.verdict.confidence}% | 경로 {c.verdict.path} | "
             f"독립 지지 {c.verdict.independent_support}, 반대 {c.verdict.independent_contra} | "
             + ", ".join(e.url for e in c.evidence[:3])
             for c in checks
@@ -237,7 +315,10 @@ class Council:
         answers = await self.stage1(question, context, list(other_ideas or []))
         reviews = await self.stage2(question, answers)
         standings = aggregate(reviews, [a for a in answers if a.ok])
-        checks = await self.gate(self.claims_to_verify(answers, reviews), context) if verify else []
+        selected = self.select_claims(answers, reviews) if verify else []
+        checks = await self.gate([t for t, _ in selected], context) if selected else []
+        for check, (_, is_key) in zip(checks, selected):
+            check.key = is_key
         synthesis, extra, error = await self.stage3(question, context, answers, standings, reviews, checks)
         return CouncilResult(
             question=question,
@@ -246,8 +327,9 @@ class Council:
             standings=standings,
             checks=checks,
             synthesis=synthesis,
-            links=[x for x in extra.get("links") or [] if isinstance(x, dict)],
-            next_questions=[str(q) for q in extra.get("next_questions") or []],
+            links=[x for x in as_list(extra.get("links")) if isinstance(x, dict)],
+            key_claims=self.key_claims(answers),
+            next_questions=[q for q in as_list(extra.get("next_questions")) if isinstance(q, str)],
             chairman=self.config.chairman,
             chairman_error=error,
         )

@@ -9,10 +9,12 @@ import json
 import pathlib
 import sys
 
+import httpx
+
 from .config import CouncilConfig
 from .council import Council
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
-from .llm import OpenRouterClient
+from .llm import OpenRouterClient, missing_models
 
 
 def _read(path: str | None) -> str:
@@ -27,18 +29,49 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idea-url", help="Notion 아이디어 페이지 URL(행 payload에 넣음)")
     parser.add_argument("--out", default="runs", help="결과 저장 폴더")
     parser.add_argument("--no-verify", action="store_true", help="사실 검증 게이트를 건너뜀")
+    parser.add_argument("--skip-model-check", action="store_true", help="OpenRouter 모델 목록 확인을 건너뜀")
     args = parser.parse_args(argv)
 
-    config = CouncilConfig.from_env()
-    llm = OpenRouterClient(timeout_s=config.timeout_s, web_search_max_results=config.web_search_max_results)
-    ideas = [line.strip() for line in _read(args.ideas_file).splitlines() if line.strip()]
+    try:
+        context = _read(args.context_file)
+        ideas_text = _read(args.ideas_file)
+    except OSError as exc:
+        sys.stderr.write(f"파일을 읽지 못했습니다: {exc}\n")
+        return 2
+    try:
+        config = CouncilConfig.from_env()
+    except ValueError as exc:
+        sys.stderr.write(f"설정 오류: {exc}\n")
+        return 2
+    if not args.skip_model_check:
+        try:
+            missing = asyncio.run(missing_models(config.all_models()))
+        except httpx.HTTPError as exc:
+            sys.stderr.write(f"경고: OpenRouter 모델 목록을 확인하지 못했습니다({exc}). 그대로 진행합니다.\n")
+        else:
+            if missing:
+                sys.stderr.write(
+                    "OpenRouter에 없는 모델입니다: " + ", ".join(missing)
+                    + "\nCOUNCIL_MODELS, CHAIRMAN_MODEL, VERIFIER_MODEL 환경 변수로 바꾸십시오.\n"
+                )
+                return 2
+    try:
+        llm = OpenRouterClient(
+            timeout_s=config.timeout_s,
+            web_search_max_results=config.web_search_max_results,
+            extra_headers=dict(config.extra_headers),
+        )
+    except RuntimeError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    ideas = [line.strip() for line in ideas_text.splitlines() if line.strip()]
     result = asyncio.run(
-        Council(llm, config).run(args.question, _read(args.context_file), ideas, verify=not args.no_verify)
+        Council(llm, config).run(args.question, context, ideas, verify=not args.no_verify)
     )
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     (out / f"{stamp}.md").write_text(to_markdown(result), encoding="utf-8")
     (out / f"{stamp}.json").write_text(to_json(result), encoding="utf-8")
     (out / f"{stamp}.notion.json").write_text(

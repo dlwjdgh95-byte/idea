@@ -7,10 +7,19 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_FENCE = re.compile(r"```[ \t]*[a-z0-9]*[ \t]*\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _RANK_LINE = re.compile(r"^\s*\d+[.)]\s*(?:응답|Response)\s*([A-Z])\b", re.MULTILINE)
 _ANY_LABEL = re.compile(r"(?:응답|Response)\s*([A-Z])\b")
 SCORE_KEYS = ("accuracy", "evidence", "novelty", "feasibility")
+
+
+def as_list(value: Any) -> list[Any]:
+    """Model JSON is loose: a bare string means a one-item list, anything else non-list means none."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []
 
 
 def last_json_block(text: str) -> dict[str, Any] | None:
@@ -22,6 +31,18 @@ def last_json_block(text: str) -> dict[str, Any] | None:
             continue
         if isinstance(value, dict):
             return value
+    # No fenced block: accept a reply that is (or ends with) bare JSON.
+    text = (text or "").strip()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, end = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict) and not text[start + end:].strip():
+            return value
+        start = text.find("{", start + 1)
     return None
 
 
@@ -47,10 +68,14 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
     valid = set(valid_labels)
     data = last_json_block(text)
     if data is not None:
-        ranking = [_clean_label(x) for x in data.get("ranking") or []]
+        raw_ranking = data.get("ranking")
+        if isinstance(raw_ranking, str):  # "A > B > C" or "A, B, C"
+            ranking = re.findall(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])", raw_ranking)
+        else:
+            ranking = [_clean_label(x) for x in as_list(raw_ranking)]
         ranking = list(dict.fromkeys(label for label in ranking if label in valid))
         review = Review(ranking=ranking)
-        for item in data.get("reviews") or []:
+        for item in as_list(data.get("reviews")):
             if not isinstance(item, dict):
                 continue
             label = _clean_label(item.get("label", ""))
@@ -65,13 +90,26 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
             review.scores[label] = scores
             review.critiques[label] = str(item.get("critique", "")).strip()
             review.suspect_claims[label] = [
-                str(c).strip() for c in item.get("suspect_claims") or [] if str(c).strip()
+                str(c).strip() for c in as_list(item.get("suspect_claims")) if isinstance(c, str) and c.strip()
             ]
-        if review.ranking:
-            return review
+        if not review.ranking:
+            # Keep the scores and suspect claims; take the ranking from the text if there is one.
+            review.ranking = _text_ranking(text, valid)
+        return review
 
-    # Fallback, same idea as karpathy/llm-council: read "FINAL RANKING:".
-    section = text.split("FINAL RANKING:", 1)[1] if "FINAL RANKING:" in (text or "") else (text or "")
-    labels = _RANK_LINE.findall(section) or _ANY_LABEL.findall(section)
-    ranking = list(dict.fromkeys(label for label in labels if label in valid))
-    return Review(ranking=ranking, parsed_from="text")
+    return Review(ranking=_text_ranking(text, valid), parsed_from="text")
+
+
+def _text_ranking(text: str, valid: set[str]) -> list[str]:
+    """Fallback, same idea as karpathy/llm-council: read the list after "FINAL RANKING:".
+
+    Without that marker only numbered lines count; the order labels are merely
+    mentioned in is not a ranking.
+    """
+    text = text or ""
+    if "FINAL RANKING:" in text:
+        section = text.split("FINAL RANKING:", 1)[1]
+        labels = _RANK_LINE.findall(section) or _ANY_LABEL.findall(section)
+    else:
+        labels = _RANK_LINE.findall(text)
+    return list(dict.fromkeys(label for label in labels if label in valid))
