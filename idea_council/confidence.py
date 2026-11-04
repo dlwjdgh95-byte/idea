@@ -168,12 +168,16 @@ def _norm(value: str) -> str:
     return " ".join(value.lower().split())
 
 
+_SUBDOMAIN = re.compile(r"^(?:(?:www|m|mobile|amp|en|ko|english)\.)+(?=[^.]+\.[^.]+)")
+
+
 def _domain(url: str) -> str:
     try:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
         return ""
-    return host.removeprefix("www.")
+    # m.yna.co.kr, en.yna.co.kr and www.yna.co.kr are one outlet
+    return _SUBDOMAIN.sub("", host)
 
 
 _DOI = re.compile(r"(10\.\d{4,9}/[\x21-\x7e]+?)(?=$|[\s?#&\"'<>]|[^\x00-\x7f])", re.IGNORECASE)

@@ -94,6 +94,13 @@ _PUNCT = re.compile(r"[\W_]+", re.UNICODE)
 _NEGATION = re.compile(r"\b(?:not|no|never|false|untrue|myth|wrong|isn't|doesn't)\b|아니|않|없|거짓|틀리|틀렸|사실이 아", re.IGNORECASE)
 
 
+_SCOPE = re.compile(
+    r"\b(?:mice|mouse|rats?|animals?|vitro|vivo|cells?|only|briefly|temporarily|some|partly|partially|may|might|"
+    r"children|women|men|elderly|adults)\b|동물|쥐|세포|일부|일시|단기|만\b|아동|여성|남성|노인|성인|가능성",
+    re.IGNORECASE,
+)
+
+
 def _extra_words(a: str, b: str) -> str:
     """The words one wording adds to the other (in original form, for the negation check)."""
     wa, wb = a.lower().split(), b.lower().split()
@@ -116,7 +123,8 @@ def _same_claim(a: str, b: str) -> bool:
     extra = long.replace(short, "", 1)
     if any(ch.isdigit() for ch in extra):  # "50%" vs "50% in 2020" are different claims
         return False
-    return not _NEGATION.search(_extra_words(a, b))  # "X" vs "It is not true that X"
+    extra_words = _extra_words(a, b)
+    return not (_NEGATION.search(extra_words) or _SCOPE.search(extra_words))  # "X" vs "not X" / "X in mice"
 
 
 def merge_claims(items: list[tuple[str, bool, int]]) -> list[tuple[str, bool, int]]:

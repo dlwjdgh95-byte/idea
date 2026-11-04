@@ -87,7 +87,7 @@ _NO_SEARCH = (  # phrases that only make sense about the search itself
     "검색 안 함", "검색 안함", "검색하지 않", "검색을 하지 않", "검색을 안 ", "검색 생략", "검색을 생략",
     "검색은 수행하지", "검색을 수행하지",
 )
-_NO_SEARCH_WHOLE = ("not performed", "not done", "skipped", "생략", "수행하지 않음", "안 함", "하지 않음")
+_NO_SEARCH_WHOLE = ("not performed", "not done", "skipped", "생략", "수행하지 않음", "안 함")
 _EMPTY = frozenset({"n/a", "na", "none", "null", "-", "없음", "해당 없음"})
 
 
@@ -300,9 +300,20 @@ async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidenc
     if ev.checked.startswith("drop: "):
         return None, f"{ev.url}: {ev.checked.removeprefix('drop: ')}"
     try:
-        return await _check_source(client, ev)
+        kept, reason = await _check_source(client, ev)
     except Exception as exc:  # noqa: BLE001  a bad URL from the model must not end the whole run
-        return None, f"{ev.url}: check failed ({type(exc).__name__})"
+        kept, reason = None, f"{ev.url}: check failed ({type(exc).__name__})"
+    if kept is None and _keep_unconfirmed_rebuttal(ev, reason):
+        # Dropping a rebuttal moves a claim toward a pass, so a credible one that could not be read
+        # (paywall, 404, protocol error) stays and counts once on the contra side.
+        return replace(ev, checked=f"unchecked: rebuttal not confirmed ({reason.split(': ', 1)[-1]})"), ""
+    return kept, reason
+
+
+def _keep_unconfirmed_rebuttal(ev: Evidence, reason: str) -> bool:
+    if ev.stance != "contradict" or ev.grade not in ("A", "B") or not ev.quote.strip():
+        return False
+    return not any(m in reason for m in ("not a public URL", "retracted", "too many redirects"))
 
 
 _CHALLENGE = ("captcha", "cookies must be enabled", "enable cookies", "enable javascript", "just a moment",

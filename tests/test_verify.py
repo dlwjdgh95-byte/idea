@@ -314,3 +314,30 @@ def test_structured_counter_search_counts_as_text():
 
 def test_doi_meta_suffix_is_trimmed():
     assert doi_of("https://iopscience.iop.org/article/10.1088/1748-9326/ab1234/meta") == "10.1088/1748-9326/ab1234"
+
+
+def test_unreadable_credible_rebuttal_is_kept_unchecked(fake_dns):
+    import asyncio as _a
+
+    from idea_council.confidence import assess
+
+    def handler(request):
+        return httpx.Response(404, text="gone")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            con = Evidence(url="https://example.com/meta", grade="A", stance="contradict",
+                           operator="Cochrane", origin="review", quote="no significant effect was found overall")
+            return await verify_mod.check_source(client, con)
+
+    kept, reason = _a.run(run())
+    assert kept is not None and kept.checked.startswith("unchecked") and not reason
+    sup = [Evidence(url=f"https://a{i}.org", grade="A", stance="support", operator=f"L{i}", origin=f"o{i}",
+                    quote="q", checked="quote found") for i in range(2)]
+    assert not assess(sup + [kept]).passed
+
+
+def test_short_korean_nothing_found_note_counts_as_search():
+    from idea_council.verify import counter_searched
+    assert counter_searched("반박 근거는 존재하지 않음")
+    assert not counter_searched("검색 안 함")

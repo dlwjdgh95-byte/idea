@@ -230,3 +230,10 @@ def test_rebuttal_flag_does_not_override_path1():
     a = [ev(f"https://a{i}.org/1", "A", operator=f"Lab{i}", origin=f"10.1/x{i}", checked="quote found")
          for i in range(2)]
     assert assess(a, rebuttal_found=True).path == "path1"
+
+
+def test_mobile_and_language_subdomains_are_one_outlet():
+    v = assess([ev("https://m.yna.co.kr/a", operator="연합뉴스", origin="a"),
+                ev("https://en.yna.co.kr/a", operator="Yonhap", origin="b"),
+                ev("https://www.yna.co.kr/a", operator="Yonhap News", origin="c")])
+    assert v.independent_support == 1
