@@ -1,0 +1,23 @@
+[project]
+name = "idea-council"
+version = "0.1.0"
+description = "LLM Council for developing ideas (after karpathy/llm-council), with anonymous peer review and a fact-check gate."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.27"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+idea-council = "idea_council.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["idea_council"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
