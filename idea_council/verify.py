@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .confidence import Evidence, Verdict, assess, doi_of
+from .confidence import Evidence, Verdict, assess, doi_of, work_id
 from .llm import LLM
 from .parsing import as_list, last_json_block
 from .prompts import verify_messages
@@ -164,6 +164,18 @@ async def _resolve(host: str, port: int) -> list[str]:
     return [info[4][0] for info in infos]
 
 
+def _work_keys(work: dict[str, Any]) -> str:
+    """OpenAlex id, DOI and a normalised-title key, so a preprint and its published version match."""
+    keys = [str(work.get("id") or "")]
+    doi = str(work.get("doi") or "").lower().removeprefix("https://doi.org/")
+    if doi:
+        keys.append(doi)
+    title = _squash(str(work.get("title") or ""))
+    if len(title) >= 30:  # short titles ("Introduction") are not distinctive
+        keys.append("title:" + title[:200])
+    return " ".join(k for k in keys if k)
+
+
 def _openalex_abstract(work: dict[str, Any]) -> str:
     """Abstract text (OpenAlex stores abstracts as an inverted index). The title alone is not used:
     a quote that is only the title shows the paper exists, not that it supports the claim."""
@@ -218,7 +230,7 @@ async def _openalex_check(client: httpx.AsyncClient, kind: str, value: str) -> t
         return None, "", "", False
     if work.get("is_retracted"):
         return f"{kind} {value} is retracted", "", "", True
-    return None, _openalex_abstract(work), str(work.get("id") or ""), True
+    return None, _openalex_abstract(work), _work_keys(work), True
 
 
 MAX_REDIRECTS = 5
@@ -280,6 +292,14 @@ _CHALLENGE = ("captcha", "cookies must be enabled", "enable cookies", "enable ja
               "checking your browser", "are you a robot", "access denied", "verify you are human")
 
 
+def _is_shell(body: str) -> bool:
+    """A tiny page that only frames or scripts in its content (law.go.kr, some portals)."""
+    low = body.lower()
+    framed = "<iframe" in low or "<frame" in low
+    js_redirect = "location.href" in low or "location.replace" in low or 'http-equiv="refresh"' in low
+    return len(_TAGS.sub(" ", body).split()) < 60 and (framed or js_redirect)
+
+
 def _looks_like_challenge(body: str) -> bool:
     low = body[:20000].lower()
     return len(body) < 30000 and any(m in low for m in _CHALLENGE)
@@ -295,7 +315,7 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         if reason:
             return None, f"{ev.url}: {reason}"
         if work:
-            ev = replace(ev, work=work)  # ties every mirror of the paper into one source
+            ev = replace(ev, work=f"{ev.work} {work}".strip())  # ties every mirror of the paper together
     note = "" if openalex_ok else "; OpenAlex unavailable, retraction not checked"
     # A resolved paper's abstract can stand in for a publisher page that blocks scripts. This is safe
     # on any host: the work id makes every URL of the same paper count as one source.
@@ -325,9 +345,27 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
     found = quote_in_page(ev.quote, page_text(body, content_type))
     if found:
         return replace(ev, checked="quote found" + note), ""
-    if status != 200 or _looks_like_challenge(body):  # 203 / bot wall: we did not see the real page
+    if status != 200 or _looks_like_challenge(body) or _is_shell(body):  # we did not see the real text
         return replace(ev, checked="unchecked: bot check page" + note), ""
     return None, f"{ev.url}: quote not found in page"
+
+
+def _origin_lookup(origin: str) -> tuple[str, str] | None:
+    wid = work_id(origin)
+    return ("doi", wid) if wid else None
+
+
+async def _with_origin_work(client: httpx.AsyncClient, ev: Evidence) -> Evidence:
+    """When the origin names a paper, add that paper's keys, so a story about a study joins the study
+    (and its preprint or published twin) instead of counting beside it."""
+    lookup = _origin_lookup(ev.origin)
+    if not lookup:
+        return ev
+    try:
+        _, _, keys, _ = await _openalex_check(client, *lookup)
+    except Exception:  # noqa: BLE001  enrichment only; the doi key from the origin still applies
+        return ev
+    return replace(ev, work=f"{ev.work} {keys}".strip()) if keys else ev
 
 
 async def filter_sources(evidence: list[Evidence], timeout_s: float = 20.0) -> tuple[list[Evidence], list[str]]:
@@ -335,6 +373,7 @@ async def filter_sources(evidence: list[Evidence], timeout_s: float = 20.0) -> t
         return [], []
     headers = {"User-Agent": "idea-council/0.2 (source check)"}
     async with httpx.AsyncClient(timeout=timeout_s, headers=headers) as client:
+        evidence = list(await asyncio.gather(*(_with_origin_work(client, e) for e in evidence)))
         results = await asyncio.gather(*(check_source(client, e) for e in evidence))
     kept = [e for e, _ in results if e is not None]
     dropped = [reason for e, reason in results if e is None]

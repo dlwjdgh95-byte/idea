@@ -199,3 +199,16 @@ def test_papers_in_the_same_journal_are_not_merged():
         ev("https://www.nejm.org/doi/full/10.1056/NEJMoa2007764", "A", operator="NIAID", origin="trial 2"),
     ])
     assert v.path == "path1"
+
+
+def test_bare_arxiv_id_origin_and_korean_particle_after_doi():
+    from idea_council.confidence import doi_of, work_id
+    assert work_id("2306.05685") == work_id("arXiv 2306.05685") == work_id("arXiv:2306.05685")
+    assert doi_of("10.1038/abc의 결과") == "10.1038/abc"
+
+
+def test_own_primary_document_proves_only_that_it_was_published():
+    filing = ev("https://dart.fss.or.kr/x", "A", operator="삼성전자", origin="공시", primary=True,
+                conflict_of_interest=True, checked="quote found")
+    v = assess([filing])
+    assert v.passed and "당사자" in v.label

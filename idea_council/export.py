@@ -76,9 +76,7 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
         v = c.verdict
         support = [e for e in c.evidence if e.stance == "support"]
         contra = [e for e in c.evidence if e.stance == "contradict"]
-        side = contra if v.label == "반박됨" else support  # grade of the side the verdict follows
-        counted = [e for e in side if not e.conflict_of_interest]
-        best = min((e.grade for e in counted), default="C")  # best grade among sources that count
+        best = v.best_grade  # from the groups the verdict actually counted
         row: dict[str, Any] = {
             "주장": c.claim,
             "판정": _judgement(c),
@@ -86,7 +84,7 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             "중요도": "핵심" if c.key or " ".join(c.claim.lower().split()) in key else "보조",
             "검증 경로": PATH_LABEL[v.path],
             "출처 등급": GRADE_LABEL[best],
-            "독립 출처 수": v.independent_support,
+            "독립 출처 수": v.independent_contra if v.label == "반박됨" else v.independent_support,
             "근거 요약": "; ".join(e.quote for e in support if e.quote)[:1900],
             "반대 근거": "; ".join(f"{e.url} {e.quote}".strip() for e in contra)[:1900],
             "독립성 메모": "; ".join(

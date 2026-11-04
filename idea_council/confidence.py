@@ -89,6 +89,13 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "core.ac.uk",
         "hal.science",
         "scholar.archive.org",
+        # news aggregators: many outlets under one domain
+        "n.news.naver.com",
+        "news.naver.com",
+        "v.daum.net",
+        "news.yahoo.com",
+        "msn.com",
+        "news.google.com",
     }
 )
 
@@ -104,7 +111,10 @@ class Evidence:
     conflict_of_interest: bool = False
     quote: str = ""
     checked: str = ""  # set by the source check: "quote found" or "unchecked: ..."
-    work: str = ""  # OpenAlex work id when the source check resolved the paper
+    # Keys the source check found for the paper behind this source or behind its origin
+    # (OpenAlex ids, DOIs, "title:<normalised title>"), space separated. A preprint and its
+    # published version share the title key even when OpenAlex lists them as two works.
+    work: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,7 @@ class Verdict:
     label: str
     independent_support: int
     independent_contra: int
+    best_grade: Grade = "C"  # best grade among the groups counted on the side the verdict follows
 
     @property
     def passed(self) -> bool:
@@ -146,12 +157,13 @@ def _domain(url: str) -> str:
     return host.removeprefix("www.")
 
 
-_DOI = re.compile(r"(10\.\d{4,9}/[^\s?#&\"'<>]+)", re.IGNORECASE)
+_DOI = re.compile(r"(10\.\d{4,9}/[\x21-\x7e]+?)(?=$|[\s?#&\"'<>]|[^\x00-\x7f])", re.IGNORECASE)
 _DOI_TAIL = re.compile(
     r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
     re.IGNORECASE,
 )
-_ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf)/|:\s*)(\d{4}\.\d{4,5})", re.IGNORECASE)
+_ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf)/|[:\s]\s*(?:id\s*)?)(\d{4}\.\d{4,5})", re.IGNORECASE)
+_BARE_ARXIV = re.compile(r"^\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*$")
 
 
 def doi_of(url: str) -> str | None:
@@ -165,8 +177,10 @@ def doi_of(url: str) -> str | None:
 
 
 def work_id(url: str) -> str | None:
-    """A key for 'the same paper' across mirrors: DOI (arXiv ids mapped to their DataCite DOI)."""
-    arxiv = _ARXIV.search(url)
+    """A key for 'the same paper' across mirrors: DOI (arXiv ids mapped to their DataCite DOI).
+
+    Accepts URLs and origin text such as 'arXiv:2306.05685', 'arXiv 2306.05685' or a bare id."""
+    arxiv = _ARXIV.search(url) or _BARE_ARXIV.match(url)
     if arxiv:
         return "10.48550/arxiv." + arxiv.group(1)
     doi = doi_of(url)
@@ -234,7 +248,7 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             keys.append("domain:" + domain)
         # One paper reached through several mirrors (doi.org, publisher, PubMed, arXiv, ...) is one
         # source: the OpenAlex work id and the DOI/arXiv id from the URL both tie them together.
-        for wid in (item.work, url_work):
+        for wid in (*item.work.split(), url_work):
             if wid:
                 keys.append("work:" + wid.lower())
         if item.url:
@@ -292,7 +306,9 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
     primary_groups = [g for g in support if g.primary]
 
     def verdict(conf: int, band: tuple[int, int], path: Path, label: str) -> Verdict:
-        return Verdict(conf, band, path, label, sup, con)
+        side = contra if label == "반박됨" else support
+        best: Grade = "A" if any(g.best_grade == "A" for g in side) else ("B" if side else "C")
+        return Verdict(conf, band, path, label, sup, con, best)
 
     def capped(reason: str) -> Verdict:
         return verdict(70, (60, 79), "none", f"조건부({reason})")
@@ -302,6 +318,12 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
     if con:  # 지지와 반대가 함께 있음(동수 포함)
         return verdict(50, (40, 59), "none", "미확정(출처 간 결론 혼재)")
     if sup == 0:
+        # A party's own primary document (공시, 보도자료) proves that it said or filed something,
+        # even though it never counts as independent evidence for anything else.
+        own = [e for e in evidence if e.stance == "support" and e.conflict_of_interest and e.primary
+               and e.grade == "A" and not e.checked.startswith("unchecked")]
+        if own:
+            return Verdict(90, (90, 99), "path1", "사실(당사자 1차 자료: 발표·공시 사실에 한함)", 0, 0, "A")
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]
     if rebuttal_found:  # the counter search reported a rebuttal (perhaps dropped by the source check)

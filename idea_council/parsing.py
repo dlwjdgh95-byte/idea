@@ -68,7 +68,11 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
     valid = set(valid_labels)
     data = last_json_block(text)
     if data is not None:
-        ranking = [_clean_label(x) for x in as_list(data.get("ranking"))]
+        raw_ranking = data.get("ranking")
+        if isinstance(raw_ranking, str):  # "A > B > C" or "A, B, C"
+            ranking = re.findall(r"(?<![A-Za-z])([A-Z])(?![A-Za-z])", raw_ranking)
+        else:
+            ranking = [_clean_label(x) for x in as_list(raw_ranking)]
         ranking = list(dict.fromkeys(label for label in ranking if label in valid))
         review = Review(ranking=ranking)
         for item in as_list(data.get("reviews")):

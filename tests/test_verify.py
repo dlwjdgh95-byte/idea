@@ -54,6 +54,9 @@ def html_handler(request):
     if request.url.host == "pubmed.ncbi.nlm.nih.gov":
         return httpx.Response(203, headers={"content-type": "text/html"},
                               text="<html>Cookies must be enabled to use this site.</html>")
+    if request.url.path == "/law":
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              text='<html><body><iframe src="/LSW/lsInfoP.do?x=1"></iframe></body></html>')
     if request.url.path == "/missing":
         return httpx.Response(404)
     if request.url.path == "/blocked":
@@ -199,3 +202,39 @@ def test_arxiv_urls_resolve_through_openalex_doi_and_amp_params_are_cut():
     assert work_lookup("https://arxiv.org/abs/2006.10256v2") == ("doi", "10.48550/arxiv.2006.10256")
     assert doi_of("https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0230405&type=printable") \
         == "10.1371/journal.pone.0230405"
+
+
+def test_iframe_shell_is_unchecked_not_dropped():
+    kept, _ = run(ev("https://example.com/law", quote="개인정보처리자는 정보주체의 동의를 받아"), html_handler)
+    assert kept is not None and kept.checked.startswith("unchecked")
+
+
+def test_origin_paper_joins_its_preprint_and_published_twin(monkeypatch):
+    from idea_council.confidence import assess as _assess
+    from idea_council.verify import _with_origin_work
+
+    async def fake_check(client, kind, value):
+        title = "title:bertpretrainingofdeepbidirectionaltransformersforlanguageunderstanding"
+        if value == "10.48550/arxiv.1810.04805":
+            return None, "", f"https://openalex.org/W2896457183 10.48550/arxiv.1810.04805 {title}", True
+        return None, "", f"https://openalex.org/W2963341956 10.18653/v1/n19-1423 {title}", True
+    monkeypatch.setattr(verify_mod, "_openalex_check", fake_check)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(html_handler)) as client:
+            preprint = Evidence(url="https://arxiv.org/abs/1810.04805", grade="B", operator="Google AI",
+                                origin="arXiv 1810.04805", quote="q" * 20)
+            news = Evidence(url="https://news.example/bert", grade="B", operator="News",
+                            origin="10.18653/v1/N19-1423", quote="q" * 20)
+            other = Evidence(url="https://blog.example/x", grade="B", operator="Blog", origin="own test", quote="q" * 20)
+            return [await _with_origin_work(client, e) for e in (preprint, news, other)]
+    items = asyncio.run(go())
+    items[0] = Evidence(**{**items[0].__dict__, "work": items[0].work + " title:bertpretrainingofdeepbidirectionaltransformersforlanguageunderstanding"})
+    v = _assess(items)
+    assert v.independent_support == 2  # preprint + story about the published paper = one source
+
+
+def test_ranking_as_string():
+    from idea_council.parsing import parse_review
+    review = parse_review('```json\n{"ranking": "B > A > C", "reviews": []}\n```', ["A", "B", "C"])
+    assert review.ranking == ["B", "A", "C"]

@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        context = _read(args.context_file)
+        ideas_text = _read(args.ideas_file)
+    except OSError as exc:
+        sys.stderr.write(f"파일을 읽지 못했습니다: {exc}\n")
+        return 2
+    try:
         config = CouncilConfig.from_env()
     except ValueError as exc:
         sys.stderr.write(f"설정 오류: {exc}\n")
@@ -58,9 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    ideas = [line.strip() for line in _read(args.ideas_file).splitlines() if line.strip()]
+    ideas = [line.strip() for line in ideas_text.splitlines() if line.strip()]
     result = asyncio.run(
-        Council(llm, config).run(args.question, _read(args.context_file), ideas, verify=not args.no_verify)
+        Council(llm, config).run(args.question, context, ideas, verify=not args.no_verify)
     )
 
     out = pathlib.Path(args.out)
