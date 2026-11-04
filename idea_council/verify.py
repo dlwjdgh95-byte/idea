@@ -78,12 +78,13 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-_NO_SEARCH = (
-    "not performed", "not done", "no search was", "no search performed", "no counter search",
-    "did not search", "didn't search", "search skipped", "skipped the search", "skipped counter",
+_NO_SEARCH = (  # phrases that only make sense about the search itself
+    "no search was", "no search performed", "no counter search", "did not search", "didn't search",
+    "search skipped", "skipped the search", "search not performed", "search was not performed",
     "검색 안 함", "검색 안함", "검색하지 않", "검색을 하지 않", "검색을 안 ", "검색 생략", "검색을 생략",
-    "수행하지 않", "수행 안 함", "수행안함", "확인하지 않았", "찾아보지 않",
+    "검색은 수행하지", "검색을 수행하지",
 )
+_NO_SEARCH_WHOLE = ("not performed", "not done", "skipped", "생략", "수행하지 않음", "안 함", "하지 않음")
 _EMPTY = frozenset({"n/a", "na", "none", "null", "-", "없음", "해당 없음"})
 
 
@@ -93,7 +94,10 @@ def counter_searched(text: str) -> bool:
     t = " ".join(text.lower().split())
     if not t or t in _EMPTY:
         return False
-    return not any(m in t for m in _NO_SEARCH)
+    if any(m in t for m in _NO_SEARCH):
+        return False
+    # A bare "not performed" is about the search; inside a longer note it may be about something else.
+    return not (len(t) <= 30 and any(m in t for m in _NO_SEARCH_WHOLE))
 
 
 _TAGS = re.compile(r"<(script|style)\b.*?</\1>|<[^>]+>", re.IGNORECASE | re.DOTALL)
@@ -103,13 +107,21 @@ MAX_PAGE_BYTES = 3_000_000
 OPENALEX_WORK = "https://api.openalex.org/works/{kind}:{value}"
 
 
+_FOOTNOTE = re.compile(r"\[(?:\d+|[a-z]|citation needed|주\s*\d+)\]", re.IGNORECASE)
+
+
 def _squash(text: str) -> str:
-    """Lowercase and drop everything but letters and digits, so markup and spacing do not matter."""
-    return _NON_WORD.sub("", html.unescape(text).lower())
+    """Lowercase and drop footnote markers ([1]) and everything but letters and digits,
+    so markup, citations and spacing do not matter."""
+    return _NON_WORD.sub("", _FOOTNOTE.sub("", html.unescape(text)).lower())
+
+
+_SUP_REF = re.compile(r"<sup\b[^>]*class=[\"'][^\"']*reference[^\"']*[\"'][^>]*>.*?</sup>", re.IGNORECASE | re.DOTALL)
 
 
 def page_text(body: str, content_type: str) -> str:
     if "html" in content_type or body.lstrip()[:1] == "<":
+        body = _SUP_REF.sub(" ", body)
         body = _TAGS.sub(" ", body)
     return _squash(body)
 
@@ -276,6 +288,8 @@ async def _fetch(client: httpx.AsyncClient, url: str) -> tuple[int, str, str, st
 
 
 async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
+    if ev.checked.startswith("drop: "):
+        return None, f"{ev.url}: {ev.checked.removeprefix('drop: ')}"
     """Keep, annotate or drop one piece of evidence. Never raises.
 
     Dropped: non-public URL (checked on every redirect hop), unreachable or missing page,
@@ -328,6 +342,8 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
             return None, f"{ev.url}: not a public URL ({url})"
         try:
             status, content_type, body, location = await _fetch(client, url)
+        except httpx.TimeoutException:
+            return replace(ev, checked="unchecked: timed out" + note), ""
         except httpx.HTTPError as exc:
             return None, f"{ev.url}: unreachable ({type(exc).__name__})"
         if location:
@@ -336,7 +352,7 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         break
     else:
         return None, f"{ev.url}: too many redirects"
-    if status in (401, 403, 429, 503):  # refused, rate-limited or a bot challenge: not seen
+    if status in (401, 403, 429) or status >= 500:  # refused, rate-limited, bot wall or server trouble
         return replace(ev, checked="unchecked: access refused" + note), ""
     if status >= 400:
         return None, f"{ev.url}: HTTP {status}"
@@ -362,9 +378,11 @@ async def _with_origin_work(client: httpx.AsyncClient, ev: Evidence) -> Evidence
     if not lookup:
         return ev
     try:
-        _, _, keys, _ = await _openalex_check(client, *lookup)
+        reason, _, keys, _ = await _openalex_check(client, *lookup)
     except Exception:  # noqa: BLE001  enrichment only; the doi key from the origin still applies
         return ev
+    if reason and "retracted" in reason:  # a story about a retracted paper is not evidence
+        return replace(ev, checked=f"drop: origin {reason}")
     return replace(ev, work=f"{ev.work} {keys}".strip()) if keys else ev
 
 

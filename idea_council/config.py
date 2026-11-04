@@ -50,6 +50,8 @@ class CouncilConfig:
             raise ValueError("a council needs at least two members")
         if not self.roles:
             raise ValueError("at least one role is required")
+        if self.max_claims_to_verify < 1:
+            raise ValueError("COUNCIL_MAX_CLAIMS must be 1 or more (use --no-verify to skip the gate)")
         if len(set(self.members)) != len(self.members):
             raise ValueError("council members must be distinct model ids")
 

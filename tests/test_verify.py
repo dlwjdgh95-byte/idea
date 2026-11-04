@@ -238,3 +238,22 @@ def test_ranking_as_string():
     from idea_council.parsing import parse_review
     review = parse_review('```json\n{"ranking": "B > A > C", "reviews": []}\n```', ["A", "B", "C"])
     assert review.ranking == ["B", "A", "C"]
+
+
+def test_footnotes_scope_notes_and_nature_dois():
+    from idea_council.verify import counter_searched
+    page = page_text('<p>Large language models are trained.<sup class="reference">[1]</sup> They predict text.</p>',
+                     "text/html")
+    assert quote_in_page("Large language models are trained. They predict text.", page)
+    assert quote_in_page("Large language models are trained.[1] They predict text.", page)
+    assert counter_searched("'X 반박' 검색: 반박 자료 없음. 유료 논문 원문은 확인하지 않았음")
+    assert counter_searched("searched 'X fails': no rebuttal found; long-term trials were not done yet")
+    assert not counter_searched("not performed")
+    assert doi_of("https://www.nature.com/articles/s41586-020-2649-2") == "10.1038/s41586-020-2649-2"
+
+
+def test_server_errors_are_unchecked():
+    def h(request):
+        return httpx.Response(502)
+    kept, _ = run(ev("https://example.com/slow"), h)
+    assert kept is not None and kept.checked.startswith("unchecked")

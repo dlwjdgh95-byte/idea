@@ -85,7 +85,9 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             "검증 경로": PATH_LABEL[v.path],
             "출처 등급": GRADE_LABEL[best],
             "독립 출처 수": v.independent_contra if v.label == "반박됨" else v.independent_support,
-            "근거 요약": "; ".join(e.quote for e in support if e.quote)[:1900],
+            "근거 요약": "; ".join(
+                ([f"[판정 메모] {v.label}"] if "(" in v.label else []) + [e.quote for e in support if e.quote]
+            )[:1900],
             "반대 근거": "; ".join(f"{e.url} {e.quote}".strip() for e in contra)[:1900],
             "독립성 메모": "; ".join(
                 f"{e.operator or '?'} ← {e.origin or '?'} [{e.checked or '미확인'}]" for e in c.evidence

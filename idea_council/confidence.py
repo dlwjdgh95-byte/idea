@@ -96,6 +96,18 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "news.yahoo.com",
         "msn.com",
         "news.google.com",
+        # venues and blogs with many unrelated authors
+        "proceedings.neurips.cc",
+        "papers.nips.cc",
+        "openreview.net",
+        "proceedings.mlr.press",
+        "jmlr.org",
+        "nber.org",
+        "blog.naver.com",
+        "brunch.co.kr",
+        "velog.io",
+        "tistory.com",
+        "gov.uk",
     }
 )
 
@@ -162,12 +174,18 @@ _DOI_TAIL = re.compile(
     r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
     re.IGNORECASE,
 )
-_ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf)/|[:\s]\s*(?:id\s*)?)(\d{4}\.\d{4,5})", re.IGNORECASE)
+_ARXIV = re.compile(r"arxiv(?:\.org/(?:abs|pdf|html)/|[:\s]\s*(?:id\s*)?)(\d{4}\.\d{4,5})", re.IGNORECASE)
 _BARE_ARXIV = re.compile(r"^\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*$")
+
+
+_NATURE = re.compile(r"nature\.com/articles/([a-z0-9.\-]+)", re.IGNORECASE)
 
 
 def doi_of(url: str) -> str | None:
     """DOI in a URL, without version/view suffixes that publishers append (v3, .full, /abstract, /pdf)."""
+    nature = _NATURE.search(url)
+    if nature and not _DOI.search(unquote(url)):
+        return "10.1038/" + nature.group(1).rstrip(".")
     match = _DOI.search(unquote(url))
     if not match:
         return None
@@ -206,8 +224,9 @@ def _field(value: str) -> str:
 
 
 def _is_platform(operator: str) -> bool:
+    """Exact platform names only ("PubMed", "PubMed (NLM)"); "IEEE Standards Association" is a real operator."""
     op = _norm(operator)
-    return any(op == p or op.startswith((p + " ", p + "(")) for p in PLATFORM_OPERATORS)
+    return any(op == p or op.startswith((p + " (", p + "(")) for p in PLATFORM_OPERATORS)
 
 
 def independent_groups(evidence: list[Evidence]) -> list[Group]:
@@ -237,13 +256,13 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             origin_work = work_id(origin)
             if origin_work:
                 keys.append("work:" + origin_work)
+        url_work = work_id(item.url) if item.url else None
+        paper = bool(item.work or url_work)
         if op and not _is_platform(op):
             keys.append("op:" + _norm(op))
         # Two pages of the same site share an operator, except on hosting platforms where
         # unrelated authors publish side by side, and except for papers (the work key covers them).
-        url_work = work_id(item.url) if item.url else None
         domain = _domain(item.url) if item.url else ""
-        paper = bool(item.work or url_work)
         if domain and not paper and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
             keys.append("domain:" + domain)
         # One paper reached through several mirrors (doi.org, publisher, PubMed, arXiv, ...) is one
@@ -268,12 +287,15 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             primary=any(e.primary and e.grade == "A" for e in members),
             urls=tuple(e.url for e in members),
             confirmed=not all(e.checked.startswith("unchecked") for e in members),
-            shown=any(
-                _field(e.operator) and not _is_platform(_field(e.operator)) and _field(e.origin) for e in members
-            ),
+            shown=any(_shown(e) for e in members),
         )
         for members in groups.values()
     ]
+
+
+def _shown(e: Evidence) -> bool:
+    op = _field(e.operator)
+    return bool(op and _field(e.origin) and not _is_platform(op))
 
 
 def _countable(groups: list[Group]) -> list[Group]:
@@ -317,13 +339,13 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
         return verdict(25, (0, 39), "none", "반박됨")
     if con:  # 지지와 반대가 함께 있음(동수 포함)
         return verdict(50, (40, 59), "none", "미확정(출처 간 결론 혼재)")
+    # A party's own primary document (공시, 보도자료) shows what the party said or filed, but the code
+    # cannot tell an "X announced Y" claim from Y itself, so it never passes: 조건부 at most.
+    own = [e for e in evidence if e.stance == "support" and e.conflict_of_interest and e.primary
+           and e.grade == "A" and not e.checked.startswith("unchecked")]
+    if own and sup <= 1 and not rebuttal_found:
+        return verdict(70, (60, 79), "none", "조건부(당사자 1차 자료: 발표·공시 사실만 확인)")
     if sup == 0:
-        # A party's own primary document (공시, 보도자료) proves that it said or filed something,
-        # even though it never counts as independent evidence for anything else.
-        own = [e for e in evidence if e.stance == "support" and e.conflict_of_interest and e.primary
-               and e.grade == "A" and not e.checked.startswith("unchecked")]
-        if own:
-            return Verdict(90, (90, 99), "path1", "사실(당사자 1차 자료: 발표·공시 사실에 한함)", 0, 0, "A")
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]
     if rebuttal_found:  # the counter search reported a rebuttal (perhaps dropped by the source check)

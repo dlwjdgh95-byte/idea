@@ -211,4 +211,8 @@ def test_own_primary_document_proves_only_that_it_was_published():
     filing = ev("https://dart.fss.or.kr/x", "A", operator="삼성전자", origin="공시", primary=True,
                 conflict_of_interest=True, checked="quote found")
     v = assess([filing])
-    assert v.passed and "당사자" in v.label
+    assert not v.passed and v.band == (60, 79) and "당사자" in v.label  # never a pass for the claim itself
+    assert assess([filing], rebuttal_found=True).confidence < 60
+    ieee = ev("https://standards.ieee.org/x", "A", operator="IEEE Standards Association", origin="IEEE 802.11",
+              primary=True, checked="quote found")
+    assert assess([ieee]).path == "path1"  # a real operator, not a hosting platform

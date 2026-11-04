@@ -140,3 +140,19 @@ def test_link_strength_accepts_fraction_and_string():
                     {"idea": "C", "insight": "y", "type": "유추", "strength": "70"}]
     rows = notion_link_rows(result)
     assert [r["강도(%)"] for r in rows] == [0.6, 0.7]
+
+
+def test_claims_differing_in_number_or_direction_are_not_merged():
+    from idea_council.council import merge_claims
+    a = "2023년 국내 전기차 판매량은 16만 대로 전년 대비 1% 감소했다"
+    b = "2023년 국내 전기차 판매량은 16만 대로 전년 대비 1% 증가했다"
+    assert len(merge_claims([(a, False, 1), (b, False, 1)])) == 2
+    assert len(merge_claims([("Global EV sales rose 35% in 2023", False, 1),
+                             ("Global EV sales rose 15% in 2023", False, 1)])) == 2
+    assert len(merge_claims([("합계출산율은 0.72명이다.", True, 0), ("합계출산율은 0.72명이다", False, 1)])) == 1
+
+
+def test_max_claims_must_be_positive():
+    import pytest
+    with pytest.raises(ValueError):
+        CouncilConfig(members=MEMBERS, max_claims_to_verify=0)
