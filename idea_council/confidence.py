@@ -67,6 +67,19 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "medrxiv.org",
         "jstor.org",
         "pmc.ncbi.nlm.nih.gov",
+        "science.org",
+        "pnas.org",
+        "nejm.org",
+        "thelancet.com",
+        "cell.com",
+        "bmj.com",
+        "jamanetwork.com",
+        "pubs.acs.org",
+        "annualreviews.org",
+        "royalsocietypublishing.org",
+        "iop.org",
+        "aps.org",
+        "acpjournals.org",
     }
 )
 
@@ -82,6 +95,7 @@ class Evidence:
     conflict_of_interest: bool = False
     quote: str = ""
     checked: str = ""  # set by the source check: "quote found" or "unchecked: ..."
+    work: str = ""  # OpenAlex work id when the source check resolved the paper
 
 
 @dataclass(frozen=True)
@@ -92,6 +106,9 @@ class Group:
     # False only when every member was opened and its quote could not be confirmed
     # (checked starts with "unchecked"). "" means no source check ran, e.g. in tests.
     confirmed: bool = True
+    # False when no member names both an operator and an origin: such a group cannot be
+    # shown to be independent and only counts when nothing better exists (40–59%).
+    shown: bool = True
 
 
 @dataclass(frozen=True)
@@ -156,6 +173,15 @@ PLATFORM_OPERATORS: tuple[str, ...] = (
 )
 
 
+_PLACEHOLDERS = frozenset({"", "?", "unknown", "n/a", "na", "none", "null", "-", "없음", "모름", "미상", "알 수 없음"})
+
+
+def _field(value: str) -> str:
+    """Operator/origin text, with placeholders the model writes for 'don't know' treated as missing."""
+    text = value.strip()
+    return "" if _norm(text) in _PLACEHOLDERS else text
+
+
 def _is_platform(operator: str) -> bool:
     op = _norm(operator)
     return any(op == p or op.startswith((p + " ", p + "(")) for p in PLATFORM_OPERATORS)
@@ -179,23 +205,21 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
 
     seen: dict[str, int] = {}
     for idx, item in enumerate(items):
-        if not (item.operator.strip() and item.origin.strip()):
-            # Independence cannot be shown without both. These sources only join one
-            # shared bucket, so they never bridge otherwise independent groups.
-            keys = ["unknown"]
-        else:
-            keys = ["origin:" + _norm(item.origin)]
-            if not _is_platform(item.operator):
-                keys.append("op:" + _norm(item.operator))
-            # Two pages of the same site share an operator, except on hosting
-            # platforms where unrelated authors publish side by side.
-            domain = _domain(item.url) if item.url else ""
-            if domain and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
-                keys.append("domain:" + domain)
+        op, origin = _field(item.operator), _field(item.origin)
+        keys = []
+        if origin:
+            keys.append("origin:" + _norm(origin))
+        if op and not _is_platform(op):
+            keys.append("op:" + _norm(op))
+        # Two pages of the same site share an operator, except on hosting platforms where
+        # unrelated authors publish side by side, and except for papers (the work key covers them).
+        wid = item.work or (work_id(item.url) if item.url else None)
+        domain = _domain(item.url) if item.url else ""
+        if domain and not wid and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
+            keys.append("domain:" + domain)
         # One paper reached through several mirrors (doi.org, publisher, PubMed, ...) is one source.
-        wid = work_id(item.url) if item.url else None
         if wid:
-            keys.append("work:" + wid)
+            keys.append("work:" + wid.lower())
         for key in keys:
             if key in seen:
                 union(seen[key], idx)
@@ -211,27 +235,37 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             primary=any(e.primary and e.grade == "A" for e in members),
             urls=tuple(e.url for e in members),
             confirmed=not all(e.checked.startswith("unchecked") for e in members),
+            shown=any(_field(e.operator) and _field(e.origin) for e in members),
         )
         for members in groups.values()
     ]
 
 
-def _cap_unconfirmed(groups: list[Group]) -> list[Group]:
-    """Groups whose quotes could not be confirmed count at most once (the strongest of them)."""
-    confirmed = [g for g in groups if g.confirmed]
-    unconfirmed = sorted((g for g in groups if not g.confirmed), key=lambda g: (not g.primary, g.best_grade))
+def _countable(groups: list[Group]) -> list[Group]:
+    """Groups that may be counted as independent.
+
+    Groups shown to be independent all count, except that those whose quotes could not
+    be confirmed count at most once. Groups whose independence cannot be shown count
+    (as one) only when nothing else exists, which lands in 40–59%.
+    """
+    shown = [g for g in groups if g.shown]
+    if not shown:
+        return groups[:1]
+    confirmed = [g for g in shown if g.confirmed]
+    unconfirmed = sorted((g for g in shown if not g.confirmed), key=lambda g: (not g.primary, g.best_grade))
     return confirmed + unconfirmed[:1]
 
 
-def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdict:
+def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_found: bool = False) -> Verdict:
     """Apply the rubric.
 
     Two guards keep a pass honest: path 2 needs a counter-evidence search, and a
     pass needs at least one deciding source whose quote the code confirmed.
     Either failing caps the claim at 70 (조건부) instead of 80+.
     """
-    support = _cap_unconfirmed(independent_groups([e for e in evidence if e.stance == "support"]))
-    contra = independent_groups([e for e in evidence if e.stance == "contradict"])
+    support_all = independent_groups([e for e in evidence if e.stance == "support"])
+    support = _countable(support_all)
+    contra = _countable(independent_groups([e for e in evidence if e.stance == "contradict"]))
     sup, con = len(support), len(contra)
     a_sup = sum(1 for g in support if g.best_grade == "A")
     primary_groups = [g for g in support if g.primary]
@@ -249,6 +283,8 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdic
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]
+    if not any(g.shown for g in support):
+        return verdict(50, (40, 59), "none", "미확정(독립성 미확인)")
     if a_sup >= 2 or primary_groups:
         deciding = primary_groups if primary_groups and a_sup < 2 else a_groups
         if not any(g.confirmed for g in deciding):
@@ -257,6 +293,8 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdic
     if sup >= 3:
         if not counter_searched:
             return capped("반대 근거 검색 없음")
+        if rebuttal_found:  # the counter search reported a rebuttal it did not list as evidence
+            return verdict(50, (40, 59), "none", "미확정(반대 근거 검색에서 반박 발견)")
         if not any(g.confirmed for g in support):
             return capped("인용 미확인")
         if a_sup >= 1:

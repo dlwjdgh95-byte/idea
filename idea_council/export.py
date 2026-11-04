@@ -32,8 +32,9 @@ def to_markdown(result: CouncilResult) -> str:
         lines += ["## 사실 검증", "", "| 주장 | 판정 | 확신도 | 경로 | 독립 출처(지지/반대) |", "| --- | --- | --- | --- | --- |"]
         for c in result.checks:
             v = c.verdict
+            label, conf = (f"검증 실패: {c.error}", "—") if c.error else (v.label, f"{v.confidence}%")
             lines.append(
-                f"| {_cell(c.claim)} | {_cell(v.label)} | {v.confidence}% | {PATH_LABEL[v.path]} | "
+                f"| {_cell(c.claim)} | {_cell(label)} | {conf} | {PATH_LABEL[v.path]} | "
                 f"{v.independent_support}/{v.independent_contra} |"
             )
         lines.append("")
@@ -74,7 +75,8 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
         v = c.verdict
         support = [e for e in c.evidence if e.stance == "support"]
         contra = [e for e in c.evidence if e.stance == "contradict"]
-        counted = [e for e in support if not e.conflict_of_interest]
+        side = contra if v.label == "반박됨" else support  # grade of the side the verdict follows
+        counted = [e for e in side if not e.conflict_of_interest]
         best = min((e.grade for e in counted), default="C")  # best grade among sources that count
         row: dict[str, Any] = {
             "주장": c.claim,

@@ -147,3 +147,35 @@ def test_unconfirmed_groups_count_once():
                checked="quote found" if i == 0 else "unchecked: access refused") for i in range(4)]
     v = assess(srcs)
     assert v.independent_support == 2 and not v.passed
+
+
+def test_unknown_sources_never_add_to_a_count():
+    reuters = ev("https://reuters.com/a", operator="Reuters", origin="Reuters 취재")
+    bbc = ev("https://bbc.com/a", operator="BBC", origin="BBC 취재")
+    reuters2 = ev("https://reuters.com/b", operator="Reuters")
+    assert assess([reuters, bbc, reuters2]).band == (60, 79)
+    a1 = ev("https://x.org/1", "A", operator="X", origin="x1")
+    a_unknown = ev("https://y.org/1", "A", operator="unknown", origin="?")
+    assert assess([a1, a_unknown]).band == (60, 79)
+    only_unknown = [ev(f"https://u{i}.org", "A") for i in range(3)]
+    assert assess(only_unknown).band == (40, 59)
+
+
+def test_rebuttal_found_blocks_path2():
+    three = [ev(f"https://n{i}.com/1", operator=f"N{i}", origin=f"o{i}") for i in range(3)]
+    assert assess(three, rebuttal_found=True).band == (40, 59)
+
+
+def test_unconfirmed_contra_counts_once():
+    sup = [ev(f"https://s{i}.com", operator=f"S{i}", origin=f"s{i}", checked="quote found") for i in range(2)]
+    con = [ev(f"https://c{i}.com", stance="contradict", operator=f"C{i}", origin=f"c{i}",
+              checked="unchecked: access refused") for i in range(3)]
+    assert assess(sup + con).label != "반박됨"
+
+
+def test_papers_in_the_same_journal_are_not_merged():
+    v = assess([
+        ev("https://www.nejm.org/doi/full/10.1056/NEJMoa2001017", "A", operator="Wuhan team", origin="trial 1"),
+        ev("https://www.nejm.org/doi/full/10.1056/NEJMoa2007764", "A", operator="NIAID", origin="trial 2"),
+    ])
+    assert v.path == "path1"

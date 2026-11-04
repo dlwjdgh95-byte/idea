@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .confidence import HOSTING_DOMAINS, Evidence, Verdict, assess, doi_of
+from .confidence import Evidence, Verdict, assess, doi_of
 from .llm import LLM
 from .parsing import as_list, last_json_block
 from .prompts import verify_messages
@@ -78,19 +78,28 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+_NO_SEARCH = (
+    "not performed", "not done", "no search", "did not search", "didn't search", "skipped",
+    "검색 안 함", "검색 안함", "검색하지 않", "검색을 하지 않", "검색을 안", "검색 생략", "검색을 생략",
+    "수행하지 않", "수행 안", "확인하지 않았", "찾아보지 않",
+)
+_EMPTY = frozenset({"n/a", "na", "none", "null", "-", "없음", "해당 없음"})
+
+
 def counter_searched(text: str) -> bool:
-    """The rule's path 2 needs a counter-evidence search; an empty or 'not done' note does not count."""
-    t = text.strip().lower()
-    if not t:
+    """The rule's path 2 needs a counter-evidence search. Only an explicit 'no search' phrase, or an
+    empty/placeholder note, means none was done; '반박 근거는 존재하지 않음' is a search result."""
+    t = " ".join(text.lower().split())
+    if not t or t in _EMPTY:
         return False
-    return not any(m in t for m in ("not performed", "not done", "none performed", "안 함", "하지 않", "생략", "n/a"))
+    return not any(m in t for m in _NO_SEARCH)
 
 
 _TAGS = re.compile(r"<(script|style)\b.*?</\1>|<[^>]+>", re.IGNORECASE | re.DOTALL)
 _NON_WORD = re.compile(r"[\W_]+", re.UNICODE)
 MIN_QUOTE_CHARS = 15  # per piece, after normalisation (letters and digits only); shorter proves nothing
 MAX_PAGE_BYTES = 3_000_000
-OPENALEX_WORK = "https://api.openalex.org/works/doi:{doi}"
+OPENALEX_WORK = "https://api.openalex.org/works/{kind}:{value}"
 
 
 def _squash(text: str) -> str:
@@ -154,36 +163,57 @@ async def _resolve(host: str, port: int) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-def _openalex_text(work: dict[str, Any]) -> str:
-    """Title plus abstract (OpenAlex stores abstracts as an inverted index)."""
+def _openalex_abstract(work: dict[str, Any]) -> str:
+    """Abstract text (OpenAlex stores abstracts as an inverted index). The title alone is not used:
+    a quote that is only the title shows the paper exists, not that it supports the claim."""
     words: dict[int, str] = {}
-    for word, positions in (work.get("abstract_inverted_index") or {}).items():
-        for pos in positions:
-            words[pos] = word
-    abstract = " ".join(words[i] for i in sorted(words))
-    return f"{work.get('title') or ''} {abstract}"
+    index = work.get("abstract_inverted_index")
+    for word, positions in (index if isinstance(index, dict) else {}).items():
+        for pos in positions if isinstance(positions, list) else []:
+            if isinstance(pos, int):
+                words[pos] = word
+    return " ".join(words[i] for i in sorted(words))
 
 
-async def _openalex_check(client: httpx.AsyncClient, doi: str) -> tuple[str | None, str, bool]:
-    """Return (reason to drop or None, title+abstract text, whether OpenAlex answered)."""
+_PMID = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)", re.IGNORECASE)
+_PMCID = re.compile(r"/(PMC\d+)", re.IGNORECASE)
+
+
+def work_lookup(url: str) -> tuple[str, str] | None:
+    """(OpenAlex id kind, value) for a paper URL: DOI, PubMed id or PMC id."""
+    doi = doi_of(url)
+    if doi:
+        return "doi", doi
+    pmid = _PMID.search(url)
+    if pmid:
+        return "pmid", pmid.group(1)
+    if "ncbi.nlm.nih.gov" in url.lower():
+        pmc = _PMCID.search(url)
+        if pmc:
+            return "pmcid", pmc.group(1).upper()
+    return None
+
+
+async def _openalex_check(client: httpx.AsyncClient, kind: str, value: str) -> tuple[str | None, str, str, bool]:
+    """Return (reason to drop or None, abstract text, OpenAlex work id, whether OpenAlex answered)."""
     params = {"api_key": os.environ["OPENALEX_API_KEY"]} if os.environ.get("OPENALEX_API_KEY") else None
     try:
-        resp = await client.get(OPENALEX_WORK.format(doi=doi), params=params)
+        resp = await client.get(OPENALEX_WORK.format(kind=kind, value=value), params=params)
     except httpx.HTTPError:
-        return None, "", False
+        return None, "", "", False
     if resp.status_code == 404:
-        return f"DOI {doi} not found in OpenAlex", "", True
+        return f"{kind} {value} not found in OpenAlex", "", "", True
     if resp.status_code != 200:
-        return None, "", False
+        return None, "", "", False
     try:
         work = resp.json()
     except ValueError:
-        return None, "", False
+        return None, "", "", False
     if not isinstance(work, dict):
-        return None, "", False
+        return None, "", "", False
     if work.get("is_retracted"):
-        return f"DOI {doi} is retracted", "", True
-    return None, _openalex_text(work), True
+        return f"{kind} {value} is retracted", "", "", True
+    return None, _openalex_abstract(work), str(work.get("id") or ""), True
 
 
 MAX_REDIRECTS = 5
@@ -224,15 +254,6 @@ async def _fetch(client: httpx.AsyncClient, url: str) -> tuple[int, str, str, st
         return resp.status_code, content_type, raw.decode(_charset(resp, raw), errors="replace"), ""
 
 
-def _trusted_doi_host(url: str) -> bool:
-    try:
-        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
-    except ValueError:
-        return False
-    trusted = (*HOSTING_DOMAINS, "dx.doi.org", "doi.org")
-    return any(host == h or host.endswith("." + h) for h in trusted)
-
-
 async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
     """Keep, annotate or drop one piece of evidence. Never raises.
 
@@ -246,21 +267,31 @@ async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidenc
         return None, f"{ev.url}: check failed ({type(exc).__name__})"
 
 
+_CHALLENGE = ("captcha", "cookies must be enabled", "enable cookies", "enable javascript", "just a moment",
+              "checking your browser", "are you a robot", "access denied", "verify you are human")
+
+
+def _looks_like_challenge(body: str) -> bool:
+    low = body[:20000].lower()
+    return len(body) < 30000 and any(m in low for m in _CHALLENGE)
+
+
 async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
     if not ev.quote.strip():
         return None, f"{ev.url}: no quote"
-    doi = doi_of(ev.url)
-    record, openalex_ok = "", True  # title + abstract; publisher pages often hide both from scripts
-    if doi:
-        reason, record, openalex_ok = await _openalex_check(client, doi)
+    lookup = work_lookup(ev.url)
+    abstract, openalex_ok = "", True
+    if lookup:
+        reason, abstract, work, openalex_ok = await _openalex_check(client, *lookup)
         if reason:
             return None, f"{ev.url}: {reason}"
+        if work:
+            ev = replace(ev, work=work)  # ties every mirror of the paper into one source
     note = "" if openalex_ok else "; OpenAlex unavailable, retraction not checked"
-    # The OpenAlex record may stand in for the page only on doi.org or a known publisher/repository
-    # host; any other URL must be opened, so a made-up mirror cannot borrow a real paper's abstract.
-    record_ok = bool(record) and quote_in_page(ev.quote, _squash(record))
-    if record_ok and _trusted_doi_host(ev.url):
-        return replace(ev, checked="quote found (OpenAlex record)" + note), ""
+    # A resolved paper's abstract can stand in for a publisher page that blocks scripts. This is safe
+    # on any host: the work id makes every URL of the same paper count as one source.
+    if abstract and quote_in_page(ev.quote, _squash(abstract)):
+        return replace(ev, checked="quote found (OpenAlex abstract)" + note), ""
 
     url = ev.url
     for _ in range(MAX_REDIRECTS + 1):
@@ -282,9 +313,12 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         return None, f"{ev.url}: HTTP {status}"
     if not body:
         return replace(ev, checked="unchecked: not a text page" + note), ""
-    if not quote_in_page(ev.quote, page_text(body, content_type)):
-        return None, f"{ev.url}: quote not found in page"
-    return replace(ev, checked="quote found" + note), ""
+    found = quote_in_page(ev.quote, page_text(body, content_type))
+    if found:
+        return replace(ev, checked="quote found" + note), ""
+    if status != 200 or _looks_like_challenge(body):  # 203 / bot wall: we did not see the real page
+        return replace(ev, checked="unchecked: bot check page" + note), ""
+    return None, f"{ev.url}: quote not found in page"
 
 
 async def filter_sources(evidence: list[Evidence], timeout_s: float = 20.0) -> tuple[list[Evidence], list[str]]:
@@ -316,7 +350,11 @@ class Verifier:
         counter = _text(data.get("counter_search"))
         return ClaimCheck(
             claim=claim,
-            verdict=assess(evidence, counter_searched=counter_searched(counter)),
+            verdict=assess(
+                evidence,
+                counter_searched=counter_searched(counter),
+                rebuttal_found=_flag(data.get("rebuttal_found")),
+            ),
             evidence=evidence,
             dropped=dropped,
             counter_search=counter,

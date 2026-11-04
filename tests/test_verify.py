@@ -10,7 +10,7 @@ from idea_council.verify import check_source, doi_of, page_text, quote_in_page
 PAGE = "<html><body><script>var x=1</script><p>LLM judges show   position bias in pairwise comparisons.</p></body></html>"
 
 
-HOSTS = {"made-up-mirror.example": "93.184.215.16", "example.com": "93.184.215.14", "doi.org": "104.18.1.1", "api.openalex.org": "104.18.2.2",
+HOSTS = {"pubmed.ncbi.nlm.nih.gov": "130.14.29.110", "made-up-mirror.example": "93.184.215.16", "example.com": "93.184.215.14", "doi.org": "104.18.1.1", "api.openalex.org": "104.18.2.2",
          "evil.example": "127.0.0.1", "redirector.example": "93.184.215.15"}
 
 
@@ -44,12 +44,16 @@ def html_handler(request):
             return httpx.Response(404)
         if "10.1111" in str(request.url):
             return httpx.Response(200, json={"is_retracted": True})
-        return httpx.Response(200, json={"is_retracted": False, "title": "Real paper",
-                                         "abstract_inverted_index": {"judges": [1], "Panel": [0], "agree": [2]}})
+        return httpx.Response(200, json={"id": "https://openalex.org/W1", "is_retracted": False, "title": "Real paper",
+                                         "abstract_inverted_index": {"judges": [1], "Panel": [0], "agree": [2],
+                                                                     "strongly": [3], "together": [4]}})
     if request.url.host == "made-up-mirror.example":
         raise httpx.ConnectError("no route")
     if request.url.host == "redirector.example":
         return httpx.Response(302, headers={"location": "http://evil.example/admin"})
+    if request.url.host == "pubmed.ncbi.nlm.nih.gov":
+        return httpx.Response(203, headers={"content-type": "text/html"},
+                              text="<html>Cookies must be enabled to use this site.</html>")
     if request.url.path == "/missing":
         return httpx.Response(404)
     if request.url.path == "/blocked":
@@ -98,9 +102,13 @@ def test_unknown_or_retracted_doi_and_private_urls_are_dropped():
     assert doi_of("https://example.com/a") is None
 
 
-def test_doi_quote_can_match_openalex_title_and_abstract():
-    kept, _ = run(ev("https://doi.org/10.5555/real.1", quote="Real paper Panel judges agree"), html_handler)
-    assert kept is not None and kept.checked == "quote found (OpenAlex record)"
+def test_doi_quote_can_match_openalex_abstract_but_not_title_alone():
+    kept, _ = run(ev("https://doi.org/10.5555/real.1", quote="Panel judges agree strongly together"), html_handler)
+    assert kept is not None and kept.checked == "quote found (OpenAlex abstract)"
+    assert kept.work == "https://openalex.org/W1"
+    gone, _ = run(ev("https://made-up-mirror.example/10.5555/real.1", quote="Real paper ... Real paper"),
+                       html_handler)
+    assert gone is None
 
 
 def test_redirects_and_numeric_hosts_to_private_addresses_are_blocked():
@@ -163,3 +171,24 @@ def test_meta_charset_is_used():
     raw = '<html><head><meta charset="euc-kr"></head><body>한국어 원문 구절입니다 정말로</body></html>'.encode("euc-kr")
     resp = httpx.Response(200, headers={"content-type": "text/html"}, content=raw)
     assert _charset(resp, raw) == "euc-kr"
+
+
+def test_bot_wall_is_unchecked_not_dropped_and_pmid_is_looked_up():
+    from idea_council.verify import work_lookup
+    assert work_lookup("https://pubmed.ncbi.nlm.nih.gov/32353859/") == ("pmid", "32353859")
+    assert work_lookup("https://pmc.ncbi.nlm.nih.gov/articles/PMC7239082/") == ("pmcid", "PMC7239082")
+    kept, _ = run(ev("https://pubmed.ncbi.nlm.nih.gov/32353859/", quote="a sentence only on the real page"),
+                  html_handler)
+    assert kept is not None and kept.checked.startswith("unchecked")
+    kept, _ = run(ev("https://pubmed.ncbi.nlm.nih.gov/32353859/", quote="Panel judges agree strongly together"),
+                  html_handler)
+    assert kept.checked == "quote found (OpenAlex abstract)"
+
+
+def test_counter_search_phrases():
+    from idea_council.verify import counter_searched
+    assert counter_searched("'X 반론' 검색: 주장을 반박하는 근거는 존재하지 않음")
+    assert counter_searched("searched 'X criticism': no rebuttal; n/a results were irrelevant")
+    assert not counter_searched("반대 근거 검색 안 함")
+    assert not counter_searched("not performed")
+    assert not counter_searched("N/A")

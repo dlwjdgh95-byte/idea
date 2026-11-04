@@ -262,7 +262,9 @@ class Council:
                 if critique:
                     review_lines.append(f"- {record.reviewer} → {target}: {critique}")
         checks_block = "\n".join(
-            f"- {c.claim} | {c.verdict.label} | {c.verdict.confidence}% | 경로 {c.verdict.path} | "
+            f"- {c.claim} | 검증 실패({c.error}) | 사실로 쓰지 말 것"
+            if c.error
+            else f"- {c.claim} | {c.verdict.label} | {c.verdict.confidence}% | 경로 {c.verdict.path} | "
             f"독립 지지 {c.verdict.independent_support}, 반대 {c.verdict.independent_contra} | "
             + ", ".join(e.url for e in c.evidence[:3])
             for c in checks

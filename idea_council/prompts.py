@@ -99,6 +99,7 @@ def verify_messages(claim: str, context: str) -> list[dict[str, str]]:
 - stance는 "support"(주장을 지지), "contradict"(주장을 반박·부정), "neutral"(관련은 있으나 판단 근거 아님) 중 하나만 쓰십시오. 반대 근거는 반드시 "contradict"로 적으십시오.
 - primary는 공식 문서·통계표·법령·공시·표준 그 자체일 때만 true입니다. 연구 논문은 동료심사를 거쳤어도 primary가 아닙니다(등급 A, primary false).
 - counter_search에는 실제로 실행한 반대 근거 검색어와 결과를 쓰십시오. 비워 두면 경로 2로 통과할 수 없습니다.
+- 반대 근거 검색에서 주장을 반박하는 자료를 찾았다면 rebuttal_found를 true로 하고, 그 자료를 evidence에 "contradict"로 넣으십시오.
 - 확신도는 계산하지 마십시오. 증거만 정확히 적으십시오.
 
 답은 아래 JSON 블록 하나만 쓰십시오.
@@ -106,6 +107,7 @@ def verify_messages(claim: str, context: str) -> list[dict[str, str]]:
 {"evidence": [{"url": "https://...", "grade": "A", "stance": "support", "operator": "...", "origin": "...", "primary": false, "conflict_of_interest": false, "quote": "원문 구절"},
               {"url": "https://...", "grade": "B", "stance": "contradict", "operator": "...", "origin": "...", "primary": false, "conflict_of_interest": false, "quote": "반대 내용의 원문 구절"}],
  "counter_search": "반대 근거를 어떤 검색어로 찾았고 무엇이 나왔는지 한 줄",
+ "rebuttal_found": false,
  "notes": "한계나 조건 한 줄"}
 ```"""
     user = f"## 주장\n{claim}\n\n## 맥락\n{context or '(없음)'}"
