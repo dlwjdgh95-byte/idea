@@ -57,3 +57,8 @@ def test_bare_json_reply_is_read():
     assert last_json_block('{"evidence": [], "counter_search": "x"}') == {"evidence": [], "counter_search": "x"}
     assert last_json_block('설명 {"a": 1}') == {"a": 1}
     assert last_json_block('{"a": 1} 뒤에 설명') is None
+
+
+def test_fence_with_space_or_other_tag():
+    assert last_json_block('``` json\n{"a": 1}\n```') == {"a": 1}
+    assert last_json_block('```JSON5\n{"a": 2}\n```') == {"a": 2}

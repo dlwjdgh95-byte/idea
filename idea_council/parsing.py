@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-_FENCE = re.compile(r"```(?:jsonc?|json5)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_FENCE = re.compile(r"```[ \t]*[a-z0-9]*[ \t]*\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _RANK_LINE = re.compile(r"^\s*\d+[.)]\s*(?:응답|Response)\s*([A-Z])\b", re.MULTILINE)
 _ANY_LABEL = re.compile(r"(?:응답|Response)\s*([A-Z])\b")
 SCORE_KEYS = ("accuracy", "evidence", "novelty", "feasibility")

@@ -40,6 +40,12 @@ HOSTING_DOMAINS: frozenset[str] = frozenset(
         "zenodo.org",
         "github.com",
         "medium.com",
+        "linkedin.com",
+        "x.com",
+        "twitter.com",
+        "facebook.com",
+        "reddit.com",
+        "journals.lww.com",
         "substack.com",
         "youtube.com",
         "wordpress.com",
@@ -172,7 +178,7 @@ def _domain(url: str) -> str:
 
 _DOI = re.compile(r"(10\.\d{4,9}/[\x21-\x7e]+?)(?=$|[\s?#&\"'<>]|[^\x00-\x7f])", re.IGNORECASE)
 _DOI_TAIL = re.compile(
-    r"(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)+$",
+    r"(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references|meta|summary|epub|suppl)(?:\.pdf)?)+$",
     re.IGNORECASE,
 )
 # bioRxiv/medRxiv append a version (…123456v2) to the URL but not to the DOI. Other publishers can have a

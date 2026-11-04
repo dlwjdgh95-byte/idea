@@ -297,3 +297,20 @@ def test_long_article_mentioning_captcha_is_not_a_bot_wall():
     assert _looks_like_challenge("<html><body>Just a moment... enable JavaScript and cookies</body></html>")
     article = "<p>" + " ".join(["research"] * 300) + " CAPTCHA systems are studied here.</p>"
     assert not _looks_like_challenge(article)
+
+
+def test_script_rendered_statistics_page_is_kept_unchecked():
+    from idea_council.verify import _script_rendered
+    page = "<html><script>" + "x" * 100000 + "</script><body>World Bank menu Data Catalog</body></html>"
+    assert _script_rendered(page)
+    article = "<html><body><p>" + "word " * 5000 + "</p></body></html>"
+    assert not _script_rendered(article)
+
+
+def test_structured_counter_search_counts_as_text():
+    from idea_council.verify import _text, counter_searched
+    assert counter_searched(_text({"query": "X criticism", "result": "no credible rebuttal among 8 results"}))
+
+
+def test_doi_meta_suffix_is_trimmed():
+    assert doi_of("https://iopscience.iop.org/article/10.1088/1748-9326/ab1234/meta") == "10.1088/1748-9326/ab1234"

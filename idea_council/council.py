@@ -91,6 +91,16 @@ def _is_true(value: Any) -> bool:
 _PUNCT = re.compile(r"[\W_]+", re.UNICODE)
 
 
+_NEGATION = re.compile(r"\b(?:not|no|never|false|untrue|myth|wrong|isn't|doesn't)\b|아니|않|없|거짓|틀리|틀렸|사실이 아", re.IGNORECASE)
+
+
+def _extra_words(a: str, b: str) -> str:
+    """The words one wording adds to the other (in original form, for the negation check)."""
+    wa, wb = a.lower().split(), b.lower().split()
+    short, long = sorted((wa, wb), key=len)
+    return " ".join(w for w in long if w not in short)
+
+
 def _same_claim(a: str, b: str) -> bool:
     """Only true duplicates: equal apart from case, spacing and punctuation, or one wording contained in
     the other with little added. Fuzzy similarity would join claims that differ in one name or number
@@ -104,7 +114,9 @@ def _same_claim(a: str, b: str) -> bool:
     if short not in long or len(short) < 0.85 * len(long):
         return False
     extra = long.replace(short, "", 1)
-    return not any(ch.isdigit() for ch in extra)  # "50%" vs "50% in 2020" are different claims
+    if any(ch.isdigit() for ch in extra):  # "50%" vs "50% in 2020" are different claims
+        return False
+    return not _NEGATION.search(_extra_words(a, b))  # "X" vs "It is not true that X"
 
 
 def merge_claims(items: list[tuple[str, bool, int]]) -> list[tuple[str, bool, int]]:

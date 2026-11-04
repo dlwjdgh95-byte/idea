@@ -171,3 +171,9 @@ def test_contained_claim_with_extra_number_is_not_merged():
     a = "Korea's total fertility rate was the lowest in the OECD"
     assert len(merge_claims([(a, False, 1), (a + " in 2023", False, 1)])) == 2
     assert len(merge_claims([(a, False, 1), (a + " indeed", False, 1)])) == 1
+
+
+def test_negated_claim_is_not_merged():
+    from idea_council.council import merge_claims
+    x = "Regular moderate coffee consumption is associated with a lower risk of type two diabetes in adults"
+    assert len(merge_claims([(x, False, 1), ("It is not true that " + x, False, 1)])) == 2

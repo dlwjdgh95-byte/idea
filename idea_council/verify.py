@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import html
 import ipaddress
+import json
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -75,6 +76,8 @@ def _to_evidence(item: dict[str, Any]) -> Evidence | None:
 
 
 def _text(value: Any) -> str:
+    if isinstance(value, (dict, list)) and value:  # a model may give {"query": ..., "result": ...}
+        return json.dumps(value, ensure_ascii=False)
     return value.strip() if isinstance(value, str) else ""
 
 
@@ -314,6 +317,20 @@ def _is_shell(body: str) -> bool:
     return len(_TAGS.sub(" ", body).split()) < 60 and (framed or js_redirect)
 
 
+# Statistics portals that draw their tables with scripts behind a large menu, so the size test misses them.
+_SCRIPT_PORTALS = ("index.go.kr", "kosis.kr", "data-explorer.oecd.org", "data.oecd.org", "ecos.bok.or.kr",
+                   "data.worldbank.org", "data.imf.org", "ourworldindata.org/grapher")
+
+
+def _script_rendered(body: str, url: str = "") -> bool:
+    """A page whose numbers are drawn by scripts (World Bank data, e-나라지표, KOSIS): a missing quote
+    says nothing about the real page. Either a known portal, or visible text is a sliver of the HTML."""
+    low = url.lower()
+    if any(p in low for p in _SCRIPT_PORTALS):
+        return True
+    return len(body) > 20000 and len(_TAGS.sub(" ", body).strip()) < 0.03 * len(body)
+
+
 def _looks_like_challenge(body: str) -> bool:
     """A bot wall is a short page; an article that merely mentions 'captcha' or 'enable javascript' is not."""
     if len(body) >= 30000 or len(_TAGS.sub(" ", body).split()) >= 200:
@@ -366,6 +383,8 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         return replace(ev, checked="quote found" + note), ""
     if status != 200 or _looks_like_challenge(body) or _is_shell(body):  # we did not see the real text
         return replace(ev, checked="unchecked: bot check page" + note), ""
+    if _script_rendered(body, url):
+        return replace(ev, checked="unchecked: script-rendered page" + note), ""
     return None, f"{ev.url}: quote not found in page"
 
 

@@ -97,6 +97,8 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
         }
         if row["확신도(%)"] is None:
             del row["확신도(%)"]
+        if c.error or not (v.independent_support or v.independent_contra):
+            del row["출처 등급"]  # nothing was counted, so no grade to report
         for i, e in enumerate((support + contra)[:3], start=1):
             row[f"출처 {i}"] = e.url
         if idea_page_url:
