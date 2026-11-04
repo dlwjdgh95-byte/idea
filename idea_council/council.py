@@ -57,7 +57,7 @@ class ReviewRecord:
 class Standing:
     member: str
     role: str
-    average_rank: float
+    average_rank: float | None  # None when no reviewer ranked this member
     rankings_count: int
     mean_scores: dict[str, float]
 
@@ -78,6 +78,10 @@ class CouncilResult:
 
 def _norm(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+def _is_true(value: Any) -> bool:
+    return value is True or str(value).strip().lower() == "true"
 
 
 def merge_similar(claims: list[str], threshold: float = 0.85) -> list[str]:
@@ -110,13 +114,13 @@ def aggregate(reviews: list[ReviewRecord], answers: list[MemberAnswer]) -> list[
         Standing(
             member=member,
             role=roles[member],
-            average_rank=round(sum(p) / len(p), 2) if p else float("inf"),
+            average_rank=round(sum(p) / len(p), 2) if p else None,
             rankings_count=len(p),
             mean_scores={k: round(sum(v) / len(v), 2) for k, v in scores[member].items() if v},
         )
         for member, p in positions.items()
     ]
-    return sorted(standings, key=lambda s: s.average_rank)
+    return sorted(standings, key=lambda s: (s.average_rank is None, s.average_rank or 0.0))
 
 
 class Council:
@@ -183,7 +187,7 @@ class Council:
                 for claim in claims:
                     flagged[claim] = flagged.get(claim, 0) + 1
         suspect = sorted(flagged, key=lambda c: -flagged[c])
-        key = [str(c["text"]) for a in answers for c in a.claims if c.get("key")]
+        key = [str(c["text"]) for a in answers for c in a.claims if _is_true(c.get("key"))]
         return merge_similar(suspect + key)[: self.config.max_claims_to_verify]
 
     async def gate(self, claims: list[str], context: str) -> list[ClaimCheck]:

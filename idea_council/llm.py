@@ -15,6 +15,7 @@ from typing import Any, Protocol
 import httpx
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
 @dataclass
@@ -67,6 +68,34 @@ def _citations(message: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def _parse_response(model: str, resp: httpx.Response) -> Completion:
+    """Turn a 200 response into a Completion; bad bodies become errors, never exceptions."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return Completion(model=model, text="", error=f"non-JSON response: {resp.text[:300]}")
+    if not isinstance(data, dict):
+        return Completion(model=model, text="", error="unexpected response shape")
+    if data.get("error"):  # OpenRouter can report upstream failures inside a 200
+        return Completion(model=model, text="", error=f"provider error: {str(data['error'])[:300]}")
+    choice = (data.get("choices") or [{}])[0]
+    if not isinstance(choice, dict):
+        return Completion(model=model, text="", error="unexpected choice shape")
+    if choice.get("error"):
+        return Completion(model=model, text="", error=f"provider error: {str(choice['error'])[:300]}")
+    message = choice.get("message") or {}
+    return Completion(model=model, text=_content_text(message.get("content")), citations=_citations(message))
+
+
+async def missing_models(models: tuple[str, ...] | list[str], timeout_s: float = 30.0) -> list[str]:
+    """Return the model ids OpenRouter does not list. Raises httpx.HTTPError if the list is unreachable."""
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        resp = await client.get(OPENROUTER_MODELS_URL)
+        resp.raise_for_status()
+        listed = {m.get("id") for m in resp.json().get("data") or [] if isinstance(m, dict)}
+    return [m for m in models if m not in listed]
+
+
 class OpenRouterClient:
     def __init__(
         self,
@@ -112,13 +141,14 @@ class OpenRouterClient:
                     last_error = f"{type(exc).__name__}: {exc}"
                 else:
                     if resp.status_code == 200:
-                        data = resp.json()
-                        message = (data.get("choices") or [{}])[0].get("message") or {}
-                        return Completion(
-                            model=model,
-                            text=_content_text(message.get("content")),
-                            citations=_citations(message),
-                        )
+                        completion = _parse_response(model, resp)
+                        if completion.ok:
+                            return completion
+                        last_error = completion.error or last_error  # retry: often transient upstream errors
+                        if attempt + 1 < self.max_retries:
+                            await asyncio.sleep(delay)
+                            delay *= 2
+                        continue
                     last_error = f"HTTP {resp.status_code}: {resp.text[:300]}"
                     if resp.status_code not in (408, 429) and resp.status_code < 500:
                         break  # not retryable

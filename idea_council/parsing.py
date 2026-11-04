@@ -67,11 +67,24 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
             review.suspect_claims[label] = [
                 str(c).strip() for c in item.get("suspect_claims") or [] if str(c).strip()
             ]
-        if review.ranking:
-            return review
+        if not review.ranking:
+            # Keep the scores and suspect claims; take the ranking from the text if there is one.
+            review.ranking = _text_ranking(text, valid)
+        return review
 
-    # Fallback, same idea as karpathy/llm-council: read "FINAL RANKING:".
-    section = text.split("FINAL RANKING:", 1)[1] if "FINAL RANKING:" in (text or "") else (text or "")
-    labels = _RANK_LINE.findall(section) or _ANY_LABEL.findall(section)
-    ranking = list(dict.fromkeys(label for label in labels if label in valid))
-    return Review(ranking=ranking, parsed_from="text")
+    return Review(ranking=_text_ranking(text, valid), parsed_from="text")
+
+
+def _text_ranking(text: str, valid: set[str]) -> list[str]:
+    """Fallback, same idea as karpathy/llm-council: read the list after "FINAL RANKING:".
+
+    Without that marker only numbered lines count; the order labels are merely
+    mentioned in is not a ranking.
+    """
+    text = text or ""
+    if "FINAL RANKING:" in text:
+        section = text.split("FINAL RANKING:", 1)[1]
+        labels = _RANK_LINE.findall(section) or _ANY_LABEL.findall(section)
+    else:
+        labels = _RANK_LINE.findall(text)
+    return list(dict.fromkeys(label for label in labels if label in valid))

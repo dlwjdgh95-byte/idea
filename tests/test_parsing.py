@@ -28,3 +28,15 @@ def test_last_json_block_skips_invalid_and_strip():
     text = 'a\n```json\n{"x": 1}\n```\nb\n```json\n{broken\n```'
     assert last_json_block(text) == {"x": 1}
     assert strip_json_blocks('본문\n```json\n{"x": 1}\n```') == "본문"
+
+
+def test_json_review_without_ranking_keeps_suspect_claims():
+    text = '```json\n{"reviews": [{"label": "A", "accuracy": 2, "suspect_claims": ["의심"]}]}\n```\n1. 응답 B\n2. 응답 A'
+    review = parse_review(text, ["A", "B"])
+    assert review.suspect_claims["A"] == ["의심"]
+    assert review.ranking == ["B", "A"]
+
+
+def test_mentions_are_not_a_ranking():
+    review = parse_review("응답 B는 약하고 응답 A가 낫다", ["A", "B"])
+    assert review.ranking == []

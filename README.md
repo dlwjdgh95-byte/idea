@@ -29,7 +29,16 @@ LLM 판정자의 알려진 약점을 막는 장치와 사실 검증 게이트를
 | 40–59% | 독립성이 확인되지 않은 출처뿐이거나 결론이 혼재(미확정) |
 | 40% 미만 | 반대 근거 우세 또는 근거 부족 |
 
-80% 이상이 "검증 통과"입니다. 응답하지 않는 URL은 증거에서 뺍니다.
+80% 이상이 "검증 통과"입니다. 운영 주체와 원출처를 둘 다 적지 못한 출처는 독립성을 보일 수 없으므로 한 묶음으로 셉니다.
+지지와 반대가 동수면 혼재(40–59%), 반대가 더 많을 때만 반박됨(40% 미만)입니다.
+
+웹 검색 도구는 모델에게 요약 조각만 주므로, 코드가 출처를 직접 확인합니다(`verify.py`).
+
+- 페이지를 열어 인용 구절이 실제로 있는지 봅니다. 없거나, 인용이 비었거나, 404 등으로 열리지 않으면 뺍니다.
+- DOI가 있으면 OpenAlex에서 존재와 철회 여부를 확인하고, 없는 DOI나 철회 논문은 뺍니다. 출판사 페이지가 막혀 있으면 OpenAlex의 제목·초록으로 인용을 확인합니다.
+- 봇을 막는 페이지(401/403/429)와 PDF는 남기되 "unchecked"로 표시합니다. 이 경우 인용 진위는 확인하지 못한 것입니다.
+- 내부망·localhost 주소는 열지 않습니다.
+- 설계 문서의 검증 절차와 달리 코드 버전은 Consensus를 부르지 않습니다. 학술 근거는 웹 검색 + OpenAlex 확인까지만 합니다.
 
 ### 실행
 
@@ -42,7 +51,8 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 결과는 `runs/`에 markdown, JSON, Notion 행 payload(`*.notion.json`, 아이디어 허브의 주장·근거 DB와 연결 DB 속성 이름)로 저장됩니다.
 
 환경 변수: `COUNCIL_MODELS`(쉼표 구분), `CHAIRMAN_MODEL`, `VERIFIER_MODEL`, `COUNCIL_ROLES`, `COUNCIL_ROTATE_ROLES=0`, `COUNCIL_MAX_CLAIMS`, `COUNCIL_SEED`.
-기본 모델 목록은 llm-council README의 예시 설정과 같습니다. 새 모델이 나오면 환경 변수로 바꾸십시오.
+기본 모델은 llm-council README와 같은 구성(OpenAI·Google·Anthropic·xAI 각 1개, 의장 Gemini)이되, README의 `gemini-3-pro-preview`와 `grok-4`가 OpenRouter에서 내려가 2026-11-04 기준 목록에 있는 id로 바꿨습니다.
+모델 id는 자주 바뀌므로 실행 전에 OpenRouter 모델 목록과 대조하고, 없는 id가 있으면 바로 멈춥니다(`--skip-model-check`로 건너뜀).
 웹 검색은 OpenRouter의 `openrouter:web_search` 서버 도구를 씁니다.
 
 ### 설계 근거

@@ -74,8 +74,22 @@ def test_contradiction_blocks_pass():
     support = [ev(f"https://s{i}.com", operator=f"S{i}", origin=f"o{i}") for i in range(3)]
     mixed = assess(support + [ev("https://c.com", "A", "contradict", operator="C", origin="c")])
     assert mixed.band == (40, 59) and not mixed.passed
-    refuted = assess(support[:1] + [ev("https://c.com", "A", "contradict", operator="C", origin="c")])
-    assert refuted.label == "반박됨"
+    tie = assess(support[:1] + [ev("https://c.com", "A", "contradict", operator="C", origin="c")])
+    assert tie.band == (40, 59)  # 동수는 혼재, 반대가 우세할 때만 반박됨
+    refuted = assess(support[:1] + [
+        ev("https://c.com", "A", "contradict", operator="C", origin="c"),
+        ev("https://d.com", "B", "contradict", operator="D", origin="d"),
+    ])
+    assert refuted.label == "반박됨" and refuted.band == (0, 39)
+
+
+def test_missing_origin_or_operator_cannot_be_independent():
+    v = assess([
+        ev("https://news-a.com/1", operator="A일보"),
+        ev("https://news-b.com/2", operator="B방송"),
+        ev("https://news-c.com/3", origin="자체 취재 C"),
+    ])
+    assert v.independent_support == 1 and not v.passed
 
 
 def test_no_evidence_is_lack_of_evidence():

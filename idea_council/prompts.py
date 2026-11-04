@@ -84,7 +84,8 @@ FINAL RANKING:
 def verify_messages(claim: str, context: str) -> list[dict[str, str]]:
     system = """당신은 사실 검증자입니다. 웹 검색으로 아래 주장을 검증하십시오.
 규칙:
-- 검색 요약이 아니라 원문을 열어 해당 구절을 찾으십시오. 열어 보지 않은 출처는 쓰지 마십시오.
+- 검색 결과에 실제로 나온 URL만 쓰십시오. 지어낸 URL이나 기억 속 URL은 쓰지 마십시오.
+- quote에는 그 페이지 원문의 구절을 원문 언어 그대로, 한 글자도 바꾸지 말고 20자 이상 옮기십시오. 번역·요약·의역하지 마십시오. 코드가 페이지를 직접 열어 이 구절이 있는지 확인하고, 없으면 그 출처를 버립니다.
 - 반대 근거를 일부러 한 번 더 검색하십시오.
 - 출처마다 등급을 매기십시오.
   A: 동료심사 논문(특히 체계적 문헌고찰·메타분석), 정부·국제기구 공식 통계, 1차 자료(공식 문서·공시·표준·법령)
@@ -104,6 +105,9 @@ def verify_messages(claim: str, context: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+LINK_TYPES: tuple[str, ...] = ("같은 메커니즘", "같은 문제", "같은 근거", "상충", "결합하면 새 아이디어", "유추")
+
+
 def stage3_messages(
     question: str,
     context: str,
@@ -119,6 +123,7 @@ def stage3_messages(
 - 검증하지 않은 핵심 사실은 사실로 쓰지 마십시오.
 - 다수 의견에 묻히는 좋은 소수 의견은 따로 남기십시오.
 - 한국어로, 간결하게 쓰십시오."""
+    link_types = ", ".join(f'"{t}"' for t in LINK_TYPES)
     user = f"""## 질문
 {question}
 
@@ -145,8 +150,9 @@ def stage3_messages(
 ### 다음 질문
 
 맨 끝에 아래 JSON 블록을 하나 붙이십시오. links는 다른 아이디어와의 연결 후보입니다(없으면 빈 배열).
+type은 {link_types} 중에서만 고르십시오(여러 개면 배열). strength는 0~100 정수이며, 공유 근거나 같은 메커니즘이 확인되지 않은 표면적 유사성은 40 이하로 두십시오.
 ```json
-{{"links": [{{"idea": "연결되는 다른 아이디어", "insight": "왜 연결되는지 한 문장", "type": "같은 메커니즘", "strength": 60}}],
+{{"links": [{{"idea": "연결되는 다른 아이디어", "insight": "왜 연결되는지 한 문장", "type": ["같은 메커니즘"], "strength": 60, "question": "이 연결로 다음에 물을 질문"}}],
  "next_questions": ["..."]}}
 ```"""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

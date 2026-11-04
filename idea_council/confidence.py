@@ -5,10 +5,10 @@ computed here from that evidence, so the number follows the written rule
 instead of a model's mood.
 
 Independence: two sources count as one when they share an operator
-(운영 주체) or an origin (원출처). Sources whose operator and origin are
-both unknown cannot be shown to be independent, so they all collapse into
-a single group. Grade C sources and sources with a conflict of interest are
-never counted.
+(운영 주체) or an origin (원출처). The rule requires both to be shown to
+differ, so a source missing either one cannot be shown to be independent;
+all such sources collapse into a single group. Grade C sources and sources
+with a conflict of interest are never counted.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ class Evidence:
     primary: bool = False
     conflict_of_interest: bool = False
     quote: str = ""
+    checked: str = ""  # set by the source check: "quote found" or "unchecked: ..."
 
 
 @dataclass(frozen=True)
@@ -112,8 +113,8 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
             keys.append("op:" + _norm(item.operator))
         if item.origin.strip():
             keys.append("origin:" + _norm(item.origin))
-        if not keys:
-            keys.append("unknown")  # independence cannot be shown
+        if not (item.operator.strip() and item.origin.strip()):
+            keys.append("unknown")  # independence cannot be shown without both
         # Two pages of the same site share an operator, except on hosting
         # platforms where unrelated authors publish side by side.
         domain = _domain(item.url) if item.url else ""
@@ -148,9 +149,9 @@ def assess(evidence: list[Evidence]) -> Verdict:
     def verdict(conf: int, band: tuple[int, int], path: Path, label: str) -> Verdict:
         return Verdict(conf, band, path, label, sup, con)
 
-    if con and con >= sup:
+    if con > sup:  # 반대 근거 우세
         return verdict(25, (0, 39), "none", "반박됨")
-    if con:
+    if con:  # 지지와 반대가 함께 있음(동수 포함)
         return verdict(50, (40, 59), "none", "미확정(출처 간 결론 혼재)")
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")

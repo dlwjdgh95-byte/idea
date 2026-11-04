@@ -12,7 +12,7 @@ import json
 from typing import Any
 
 from .council import CouncilResult
-from .prompts import ROLES
+from .prompts import LINK_TYPES, ROLES
 
 PATH_LABEL = {"path1": "경로1 권위 출처", "path2": "경로2 독립 교차 확인", "none": "미통과"}
 GRADE_LABEL = {"A": "A 1차·동료심사·공식통계", "B": "B 신뢰 웹 자료", "C": "C 참고만"}
@@ -35,7 +35,8 @@ def to_markdown(result: CouncilResult) -> str:
         lines.append("")
     lines += ["## 상호 검토 순위", ""]
     for i, s in enumerate(result.standings, start=1):
-        lines.append(f"{i}. {_role(s.role)} ({s.member}): 평균 {s.average_rank}위, {s.rankings_count}회 평가")
+        rank = f"평균 {s.average_rank}위" if s.average_rank is not None else "순위 없음"
+        lines.append(f"{i}. {_role(s.role)} ({s.member}): {rank}, {s.rankings_count}회 평가")
     lines += ["", "## 위원 답변", ""]
     for a in result.answers:
         lines += [f"### {_role(a.role)} ({a.member})", "", a.text if a.ok else f"(실패: {a.error})", ""]
@@ -47,13 +48,14 @@ def to_json(result: CouncilResult) -> str:
 
 
 def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -> list[dict[str, Any]]:
-    today = dt.date.today().isoformat()
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     rows = []
     for c in result.checks:
         v = c.verdict
         support = [e for e in c.evidence if e.stance == "support"]
         contra = [e for e in c.evidence if e.stance == "contradict"]
-        best = min((e.grade for e in c.evidence), default="C")
+        counted = [e for e in support if not e.conflict_of_interest]
+        best = min((e.grade for e in counted), default="C")  # best grade among sources that count
         row: dict[str, Any] = {
             "주장": c.claim,
             "판정": "지지" if v.passed else ("반박" if v.label == "반박됨" else "혼재" if "혼재" in v.label else "확인 불가"),
@@ -64,11 +66,13 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             "독립 출처 수": v.independent_support,
             "근거 요약": "; ".join(e.quote for e in support if e.quote)[:1900],
             "반대 근거": "; ".join(f"{e.url} {e.quote}".strip() for e in contra)[:1900],
-            "독립성 메모": "; ".join(f"{e.operator or '?'} ← {e.origin or '?'}" for e in c.evidence)[:1900],
+            "독립성 메모": "; ".join(
+                f"{e.operator or '?'} ← {e.origin or '?'} [{e.checked or '미확인'}]" for e in c.evidence
+            )[:1900],
             "date:검증일:start": today,
             "date:검증일:is_datetime": 0,
         }
-        for i, e in enumerate(c.evidence[:3], start=1):
+        for i, e in enumerate((support + contra)[:3], start=1):
             row[f"출처 {i}"] = e.url
         if idea_page_url:
             row["아이디어"] = json.dumps([idea_page_url])
@@ -76,17 +80,29 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
     return rows
 
 
+def _link_types(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return [t for t in (str(v).strip() for v in values if v) if t in LINK_TYPES]
+
+
 def notion_link_rows(result: CouncilResult, idea_page_url: str | None = None) -> list[dict[str, Any]]:
+    """Rows for the 연결 DB. The other idea is free text from the chairman, so it goes into
+    the title; the relation only holds the idea page given on the command line."""
     rows = []
     for link in result.links:
         strength = link.get("strength")
+        other = str(link.get("idea", "")).strip()
+        insight = str(link.get("insight", "")).strip()
         row: dict[str, Any] = {
-            "통찰 한 줄": str(link.get("insight", "")).strip() or str(link.get("idea", "")),
-            "연결 유형": json.dumps([link["type"]], ensure_ascii=False) if link.get("type") else "[]",
+            "통찰 한 줄": (f"[{other}] {insight}" if other and insight else insight or other)[:1900],
+            "연결 유형": json.dumps(_link_types(link.get("type")), ensure_ascii=False),
             "발견 경로": "카운슬",
-            "다음 질문": str(link.get("idea", "")),
+            "상태": "후보",
         }
-        if isinstance(strength, (int, float)):
+        question = str(link.get("question", "")).strip()
+        if question:
+            row["다음 질문"] = question[:1900]
+        if isinstance(strength, (int, float)) and not isinstance(strength, bool):
             row["강도(%)"] = max(0.0, min(1.0, float(strength) / 100))
         if idea_page_url:
             row["아이디어"] = json.dumps([idea_page_url])

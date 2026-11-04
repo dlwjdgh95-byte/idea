@@ -89,3 +89,17 @@ def test_synthesis_links_and_exports():
     assert rows[0]["검증 경로"] == "경로2 독립 교차 확인" and rows[0]["확신도(%)"] == 0.85
     assert notion_link_rows(result)[0]["강도(%)"] == 0.65
     assert "## 사실 검증" in to_markdown(result)
+
+
+def test_link_rows_only_use_db_options():
+    _, result = run_council()
+    result.links = [{"idea": "B", "insight": "같은 병목", "type": ["같은 문제", "아무거나"], "strength": 70, "question": "합치면?"}]
+    row = notion_link_rows(result)[0]
+    assert json.loads(row["연결 유형"]) == ["같은 문제"]
+    assert row["통찰 한 줄"] == "[B] 같은 병목" and row["다음 질문"] == "합치면?"
+
+
+def test_duplicate_members_are_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        CouncilConfig(members=("m/a", "m/a"))
