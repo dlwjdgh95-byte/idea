@@ -230,8 +230,8 @@ async def _openalex_check(client: httpx.AsyncClient, kind: str, value: str) -> t
         resp = await client.get(OPENALEX_WORK.format(kind=kind, value=value), params=params)
     except httpx.HTTPError:
         return None, "", "", False
-    if resp.status_code == 404:
-        return f"{kind} {value} not found in OpenAlex", "", "", True
+    if resp.status_code == 404:  # not every real DOI is indexed (OECD, some datasets): open the page instead
+        return None, "", "", True
     if resp.status_code != 200:
         return None, "", "", False
     try:
@@ -288,14 +288,14 @@ async def _fetch(client: httpx.AsyncClient, url: str) -> tuple[int, str, str, st
 
 
 async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
-    if ev.checked.startswith("drop: "):
-        return None, f"{ev.url}: {ev.checked.removeprefix('drop: ')}"
     """Keep, annotate or drop one piece of evidence. Never raises.
 
     Dropped: non-public URL (checked on every redirect hop), unreachable or missing page,
     unknown or retracted DOI, no quote, or a quote that is not in the page text.
     Kept but marked "unchecked: ...": pages that refuse bots (401/403/429) or are not text (PDF).
     """
+    if ev.checked.startswith("drop: "):
+        return None, f"{ev.url}: {ev.checked.removeprefix('drop: ')}"
     try:
         return await _check_source(client, ev)
     except Exception as exc:  # noqa: BLE001  a bad URL from the model must not end the whole run

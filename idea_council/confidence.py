@@ -14,7 +14,7 @@ with a conflict of interest are never counted.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import unquote, urlparse
 
@@ -185,7 +185,7 @@ def doi_of(url: str) -> str | None:
     """DOI in a URL, without version/view suffixes that publishers append (v3, .full, /abstract, /pdf)."""
     nature = _NATURE.search(url)
     if nature and not _DOI.search(unquote(url)):
-        return "10.1038/" + nature.group(1).rstrip(".")
+        return "10.1038/" + _DOI_TAIL.sub("", nature.group(1)).rstrip(".")
     match = _DOI.search(unquote(url))
     if not match:
         return None
@@ -314,6 +314,25 @@ def _countable(groups: list[Group]) -> list[Group]:
 
 
 def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_found: bool = False) -> Verdict:
+    """Apply the rubric, then the party's-own-document floor (see :func:`_own_document_floor`)."""
+    result = _assess(evidence, counter_searched=counter_searched, rebuttal_found=rebuttal_found)
+    return _own_document_floor(result, evidence, rebuttal_found)
+
+
+def _own_document_floor(result: Verdict, evidence: list[Evidence], rebuttal_found: bool) -> Verdict:
+    """A party's own primary document (공시, 보도자료) shows what the party said or filed. The code
+    cannot tell an "X announced Y" claim from Y itself, so it never makes a claim pass; it only lifts
+    a weaker result to 70 (조건부) when nothing contradicts it."""
+    own = [e for e in evidence if e.stance == "support" and e.conflict_of_interest and e.primary
+           and e.grade == "A" and not e.checked.startswith("unchecked")]
+    if not own or rebuttal_found or result.independent_contra or result.confidence >= 70:
+        return result
+    return replace(result, confidence=70, band=(60, 79), path="none",
+                   label="조건부(당사자 1차 자료: 발표·공시 사실만 확인)",
+                   best_grade="A" if result.best_grade != "A" else result.best_grade)
+
+
+def _assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_found: bool = False) -> Verdict:
     """Apply the rubric.
 
     Two guards keep a pass honest: path 2 needs a counter-evidence search, and a
@@ -339,12 +358,6 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True, rebuttal_
         return verdict(25, (0, 39), "none", "반박됨")
     if con:  # 지지와 반대가 함께 있음(동수 포함)
         return verdict(50, (40, 59), "none", "미확정(출처 간 결론 혼재)")
-    # A party's own primary document (공시, 보도자료) shows what the party said or filed, but the code
-    # cannot tell an "X announced Y" claim from Y itself, so it never passes: 조건부 at most.
-    own = [e for e in evidence if e.stance == "support" and e.conflict_of_interest and e.primary
-           and e.grade == "A" and not e.checked.startswith("unchecked")]
-    if own and sup <= 1 and not rebuttal_found:
-        return verdict(70, (60, 79), "none", "조건부(당사자 1차 자료: 발표·공시 사실만 확인)")
     if sup == 0:
         return verdict(20, (0, 39), "none", "근거 부족")
     a_groups = [g for g in support if g.best_grade == "A"]

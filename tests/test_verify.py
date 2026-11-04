@@ -57,6 +57,8 @@ def html_handler(request):
     if request.url.path == "/law":
         return httpx.Response(200, headers={"content-type": "text/html"},
                               text='<html><body><iframe src="/LSW/lsInfoP.do?x=1"></iframe></body></html>')
+    if request.url.host == "doi.org" and "10.9999" in str(request.url):
+        return httpx.Response(404)
     if request.url.path == "/missing":
         return httpx.Response(404)
     if request.url.path == "/blocked":
@@ -96,7 +98,7 @@ def test_refused_or_binary_pages_are_kept_but_marked_unchecked():
 
 def test_unknown_or_retracted_doi_and_private_urls_are_dropped():
     gone, reason = run(ev("https://doi.org/10.9999/fake.123"), html_handler)
-    assert gone is None and "not found in OpenAlex" in reason
+    assert gone is None and "404" in reason  # not in OpenAlex, and doi.org itself does not resolve it
     gone, reason = run(ev("https://doi.org/10.1111/retracted.1"), html_handler)
     assert gone is None and "retracted" in reason
     gone, reason = run(ev("http://127.0.0.1/admin"), html_handler)
@@ -257,3 +259,7 @@ def test_server_errors_are_unchecked():
         return httpx.Response(502)
     kept, _ = run(ev("https://example.com/slow"), h)
     assert kept is not None and kept.checked.startswith("unchecked")
+
+
+def test_nature_pdf_link_doi():
+    assert doi_of("https://www.nature.com/articles/s41586-020-2649-2.pdf") == "10.1038/s41586-020-2649-2"

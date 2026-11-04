@@ -156,3 +156,11 @@ def test_max_claims_must_be_positive():
     import pytest
     with pytest.raises(ValueError):
         CouncilConfig(members=MEMBERS, max_claims_to_verify=0)
+
+
+def test_claims_with_different_names_are_not_merged():
+    from idea_council.council import merge_claims
+    pairs = [("Germany has the largest economy in the EU by GDP", "France has the largest economy in the EU by GDP"),
+             ("서울에서 아파트 값은 강남구가 가장 비싸다", "서울에서 아파트 값은 서초구가 가장 비싸다")]
+    for a, b in pairs:
+        assert len(merge_claims([(a, False, 1), (b, False, 1)])) == 2

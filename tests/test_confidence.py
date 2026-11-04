@@ -216,3 +216,11 @@ def test_own_primary_document_proves_only_that_it_was_published():
     ieee = ev("https://standards.ieee.org/x", "A", operator="IEEE Standards Association", origin="IEEE 802.11",
               primary=True, checked="quote found")
     assert assess([ieee]).path == "path1"  # a real operator, not a hosting platform
+
+
+def test_own_document_does_not_lower_a_stronger_verdict():
+    fda = ev("https://fda.gov/x", "A", operator="FDA", origin="FDA 승인 공고", primary=True, checked="quote found")
+    pr = ev("https://acme.com/pr", "A", operator="Acme", origin="Acme 보도자료", primary=True,
+            conflict_of_interest=True, checked="quote found")
+    assert assess([fda, pr]).path == "path1"
+    assert assess([pr]).band == (60, 79)

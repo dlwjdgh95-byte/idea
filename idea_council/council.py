@@ -16,7 +16,6 @@ import random
 import re
 import string
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any
 
@@ -89,34 +88,30 @@ def _is_true(value: Any) -> bool:
     return value is True or str(value).strip().lower() == "true"
 
 
-_DIGITS = re.compile(r"\d+(?:[.,]\d+)*")
-_POLAR = (
-    "증가", "감소", "상승", "하락", "늘", "줄", "높", "낮", "많", "적", "않", "없", "못", "아니", "이상", "이하",
-    "rose", "rise", "fell", "fall", "increase", "decrease", "higher", "lower", "more", "less", "not", "no",
-    "never", "above", "below", "up", "down",
-)
+_PUNCT = re.compile(r"[\W_]+", re.UNICODE)
 
 
-def _same_claim(a: str, b: str, threshold: float) -> bool:
-    """Near-duplicates only: claims that differ in a number or a direction/negation word are different
-    claims (often the very disagreement worth checking)."""
-    if _DIGITS.findall(a) != _DIGITS.findall(b):
+def _same_claim(a: str, b: str) -> bool:
+    """Only true duplicates: equal apart from case, spacing and punctuation, or one wording contained in
+    the other with little added. Fuzzy similarity would join claims that differ in one name or number
+    ("Germany" vs "France"), which is exactly the disagreement worth checking."""
+    x, y = _PUNCT.sub("", a.lower()), _PUNCT.sub("", b.lower())
+    if not x or not y:
         return False
-    ta, tb = set(_norm(a).split()), set(_norm(b).split())
-    diff = " ".join(ta ^ tb)
-    if any(p in diff for p in _POLAR):
-        return False
-    return SequenceMatcher(None, _norm(a), _norm(b)).ratio() >= threshold
+    if x == y:
+        return True
+    short, long = sorted((x, y), key=len)
+    return short in long and len(short) >= 0.85 * len(long)
 
 
-def merge_claims(items: list[tuple[str, bool, int]], threshold: float = 0.85) -> list[tuple[str, bool, int]]:
+def merge_claims(items: list[tuple[str, bool, int]]) -> list[tuple[str, bool, int]]:
     """Merge near-duplicate claims, keeping the first wording, OR-ing the key flag and summing flags."""
     kept: list[list[Any]] = []
     for text, is_key, flags in items:
         if not text.strip():
             continue
         for k in kept:
-            if _same_claim(text, k[0], threshold):
+            if _same_claim(text, k[0]):
                 k[1] = k[1] or is_key
                 k[2] += flags
                 break
