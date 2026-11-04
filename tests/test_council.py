@@ -117,3 +117,26 @@ def test_gate_survives_a_crashing_verifier_and_exports_judgement():
     rows = notion_claim_rows(result)
     assert {r["판정"] for r in rows} == {"확인 불가"}
     assert {r["중요도"] for r in rows} == {"핵심", "보조"}  # suspect claim is 보조, members' key claims 핵심
+
+
+def test_key_claims_are_not_crowded_out_and_keep_their_flag():
+    from idea_council.council import MemberAnswer, ReviewRecord
+    from idea_council.parsing import Review
+    config = CouncilConfig(members=MEMBERS, chairman="c", verifier="v", max_claims_to_verify=4)
+    council = Council(FakeLLM(), config, verifier=Verifier(FakeLLM(), "v", check_urls=False))
+    answers = [MemberAnswer("m/a", "critic", "t", [{"text": "합계출산율은 0.72명이다.", "key": True},
+                                                   {"text": "핵심 주장 둘", "key": "true"}])]
+    suspects = {"A": ["서울 인구는 천만이다", "GPT-5는 2024년 출시", "화성에 물이 있다", "커피는 수명을 늘린다",
+                   "비트코인은 2009년 시작", "한국 GDP는 세계 10위", "달은 매년 멀어진다", "꿀은 상하지 않는다"] + ["합계출산율은 0.72명이다"]}
+    reviews = [ReviewRecord("m/b", {"A": "m/a"}, Review(ranking=["A"], suspect_claims=suspects))]
+    picked = council.select_claims(answers, reviews)
+    assert picked[0] == ("합계출산율은 0.72명이다", True)  # flagged and key: first, flagged as key
+    assert ("핵심 주장 둘", True) in picked and len(picked) == 4
+
+
+def test_link_strength_accepts_fraction_and_string():
+    _, result = run_council()
+    result.links = [{"idea": "B", "insight": "x", "type": "유추", "strength": 0.6},
+                    {"idea": "C", "insight": "y", "type": "유추", "strength": "70"}]
+    rows = notion_link_rows(result)
+    assert [r["강도(%)"] for r in rows] == [0.6, 0.7]

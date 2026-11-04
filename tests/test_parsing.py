@@ -44,3 +44,10 @@ def test_mentions_are_not_a_ranking():
 
 def test_uppercase_json_fence():
     assert last_json_block('```JSON\n{"x": 2}\n```') == {"x": 2}
+
+
+def test_string_where_a_list_is_expected():
+    text = '```json\n{"reviews": [{"label": "A", "suspect_claims": "GPT-5는 2024년에 출시됐다"}], "ranking": "A"}\n```'
+    review = parse_review(text, ["A"])
+    assert review.suspect_claims["A"] == ["GPT-5는 2024년에 출시됐다"]
+    assert review.ranking == ["A"]

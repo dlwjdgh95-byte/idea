@@ -45,7 +45,7 @@ def _content_text(content: Any) -> str:
         return content
     if isinstance(content, list):  # some providers return content parts
         return "".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
+            part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)
         )
     return ""
 
@@ -83,7 +83,9 @@ def _parse_response(model: str, resp: httpx.Response) -> Completion:
         return Completion(model=model, text="", error="unexpected choice shape")
     if choice.get("error"):
         return Completion(model=model, text="", error=f"provider error: {str(choice['error'])[:300]}")
-    message = choice.get("message") or {}
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return Completion(model=model, text="", error="unexpected message shape")
     return Completion(model=model, text=_content_text(message.get("content")), citations=_citations(message))
 
 

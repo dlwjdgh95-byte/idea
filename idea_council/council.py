@@ -16,6 +16,7 @@ import random
 import string
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from itertools import zip_longest
 from typing import Any
 
 from .confidence import assess
@@ -24,6 +25,7 @@ from .llm import LLM
 from .parsing import (
     SCORE_KEYS,
     Review,
+    as_list,
     last_json_block,
     parse_review,
     strip_json_blocks,
@@ -97,6 +99,22 @@ def merge_similar(claims: list[str], threshold: float = 0.85) -> list[str]:
     return kept
 
 
+def merge_claims(items: list[tuple[str, bool, int]], threshold: float = 0.85) -> list[tuple[str, bool, int]]:
+    """Merge near-duplicate claims, keeping the first wording, OR-ing the key flag and summing flags."""
+    kept: list[list[Any]] = []
+    for text, is_key, flags in items:
+        if not text.strip():
+            continue
+        for k in kept:
+            if SequenceMatcher(None, _norm(text), _norm(k[0])).ratio() >= threshold:
+                k[1] = k[1] or is_key
+                k[2] += flags
+                break
+        else:
+            kept.append([text.strip(), is_key, flags])
+    return [(t, bool(k), int(f)) for t, k, f in kept]
+
+
 def aggregate(reviews: list[ReviewRecord], answers: list[MemberAnswer]) -> list[Standing]:
     """Average rank per member across reviewers (lower is better), plus mean criterion scores."""
     positions: dict[str, list[int]] = {a.member: [] for a in answers}
@@ -152,10 +170,14 @@ class Council:
         async def ask(member: str, role: str) -> MemberAnswer:
             completion = await self.llm.complete(member, stage1_messages(question, context, role, other_ideas))
             data = last_json_block(completion.text) or {}
-            claims = [c for c in data.get("claims") or [] if isinstance(c, dict) and c.get("text")]
+            claims = [c for c in as_list(data.get("claims")) if isinstance(c, dict) and isinstance(c.get("text"), str)]
             return MemberAnswer(member, role, strip_json_blocks(completion.text), claims, completion.error)
 
-        return list(await asyncio.gather(*(ask(m, r) for m, r in assignment)))
+        results = await asyncio.gather(*(ask(m, r) for m, r in assignment), return_exceptions=True)
+        return [
+            r if isinstance(r, MemberAnswer) else MemberAnswer(m, role, "", error=f"{type(r).__name__}: {r}")
+            for (m, role), r in zip(assignment, results)
+        ]
 
     # Stage 2 -----------------------------------------------------------------
     async def stage2(self, question: str, answers: list[MemberAnswer]) -> list[ReviewRecord]:
@@ -178,19 +200,30 @@ class Council:
 
         if len(valid) < 2:
             return []
-        return list(await asyncio.gather(*(review(r) for r in valid)))
+        results = await asyncio.gather(*(review(r) for r in valid), return_exceptions=True)
+        return [r for r in results if isinstance(r, ReviewRecord)]  # a crashed reviewer just casts no vote
 
     # Stage 2.5 ---------------------------------------------------------------
     def claims_to_verify(self, answers: list[MemberAnswer], reviews: list[ReviewRecord]) -> list[str]:
-        """Suspect claims first (most flagged first), then key claims, near-duplicates merged."""
+        """Pick claims for the gate: those both key and flagged first, then suspect and key claims
+        taken in turn so neither kind crowds out the other. Near-duplicates are merged."""
+        return [text for text, _ in self.select_claims(answers, reviews)]
+
+    def select_claims(self, answers: list[MemberAnswer], reviews: list[ReviewRecord]) -> list[tuple[str, bool]]:
         flagged: dict[str, int] = {}
         for record in reviews:
             for claims in record.review.suspect_claims.values():
                 for claim in claims:
                     flagged[claim] = flagged.get(claim, 0) + 1
-        suspect = sorted(flagged, key=lambda c: -flagged[c])
-        key = [str(c["text"]) for a in answers for c in a.claims if _is_true(c.get("key"))]
-        return merge_similar(suspect + key)[: self.config.max_claims_to_verify]
+        key_texts = self.key_claims(answers)
+        merged = merge_claims([(c, False, n) for c, n in flagged.items()] + [(c, True, 0) for c in key_texts])
+        both = sorted((m for m in merged if m[1] and m[2]), key=lambda m: -m[2])
+        suspect = sorted((m for m in merged if not m[1]), key=lambda m: -m[2])
+        key_only = [m for m in merged if m[1] and not m[2]]
+        ordered = list(both)
+        for pair in zip_longest(suspect, key_only):
+            ordered.extend(m for m in pair if m is not None)
+        return [(text, is_key) for text, is_key, _ in ordered[: self.config.max_claims_to_verify]]
 
     @staticmethod
     def key_claims(answers: list[MemberAnswer]) -> list[str]:
@@ -252,7 +285,10 @@ class Council:
         answers = await self.stage1(question, context, list(other_ideas or []))
         reviews = await self.stage2(question, answers)
         standings = aggregate(reviews, [a for a in answers if a.ok])
-        checks = await self.gate(self.claims_to_verify(answers, reviews), context) if verify else []
+        selected = self.select_claims(answers, reviews) if verify else []
+        checks = await self.gate([t for t, _ in selected], context) if selected else []
+        for check, (_, is_key) in zip(checks, selected):
+            check.key = is_key
         synthesis, extra, error = await self.stage3(question, context, answers, standings, reviews, checks)
         return CouncilResult(
             question=question,
@@ -261,9 +297,9 @@ class Council:
             standings=standings,
             checks=checks,
             synthesis=synthesis,
-            links=[x for x in extra.get("links") or [] if isinstance(x, dict)],
+            links=[x for x in as_list(extra.get("links")) if isinstance(x, dict)],
             key_claims=self.key_claims(answers),
-            next_questions=[str(q) for q in extra.get("next_questions") or []],
+            next_questions=[q for q in as_list(extra.get("next_questions")) if isinstance(q, str)],
             chairman=self.config.chairman,
             chairman_error=error,
         )

@@ -10,7 +10,7 @@ from idea_council.verify import check_source, doi_of, page_text, quote_in_page
 PAGE = "<html><body><script>var x=1</script><p>LLM judges show   position bias in pairwise comparisons.</p></body></html>"
 
 
-HOSTS = {"example.com": "93.184.215.14", "doi.org": "104.18.1.1", "api.openalex.org": "104.18.2.2",
+HOSTS = {"made-up-mirror.example": "93.184.215.16", "example.com": "93.184.215.14", "doi.org": "104.18.1.1", "api.openalex.org": "104.18.2.2",
          "evil.example": "127.0.0.1", "redirector.example": "93.184.215.15"}
 
 
@@ -46,6 +46,8 @@ def html_handler(request):
             return httpx.Response(200, json={"is_retracted": True})
         return httpx.Response(200, json={"is_retracted": False, "title": "Real paper",
                                          "abstract_inverted_index": {"judges": [1], "Panel": [0], "agree": [2]}})
+    if request.url.host == "made-up-mirror.example":
+        raise httpx.ConnectError("no route")
     if request.url.host == "redirector.example":
         return httpx.Response(302, headers={"location": "http://evil.example/admin"})
     if request.url.path == "/missing":
@@ -131,3 +133,33 @@ def test_stance_and_flags_are_parsed_strictly():
     assert _to_evidence({**base}) is None  # no stance, no vote
     e = _to_evidence({**base, "stance": "support", "primary": "false", "conflict_of_interest": "true"})
     assert e.primary is False and e.conflict_of_interest is True
+
+
+def test_openalex_record_only_stands_in_for_doi_and_publisher_hosts():
+    gone, reason = run(ev("https://made-up-mirror.example/10.5555/real.1", quote="Real paper Panel judges agree"),
+                       html_handler)
+    assert gone is None and "unreachable" in reason
+
+
+def test_counter_search_must_be_text():
+    import asyncio as _a
+    import json as _j
+
+    from idea_council.llm import Completion
+    from idea_council.verify import Verifier
+
+    class LLM:
+        async def complete(self, model, messages, *, web_search=False):
+            evidence = [{"url": f"https://s{i}.example/a", "grade": "B", "stance": "support",
+                         "operator": f"O{i}", "origin": f"G{i}", "quote": "q" * 30} for i in range(3)]
+            return Completion(model, "```json\n" + _j.dumps({"evidence": evidence, "counter_search": None}) + "\n```")
+
+    check = _a.run(Verifier(LLM(), "m", check_urls=False).verify("claim"))
+    assert check.verdict.independent_support == 3 and not check.verdict.passed
+
+
+def test_meta_charset_is_used():
+    from idea_council.verify import _charset
+    raw = '<html><head><meta charset="euc-kr"></head><body>한국어 원문 구절입니다 정말로</body></html>'.encode("euc-kr")
+    resp = httpx.Response(200, headers={"content-type": "text/html"}, content=raw)
+    assert _charset(resp, raw) == "euc-kr"

@@ -13,6 +13,15 @@ _ANY_LABEL = re.compile(r"(?:응답|Response)\s*([A-Z])\b")
 SCORE_KEYS = ("accuracy", "evidence", "novelty", "feasibility")
 
 
+def as_list(value: Any) -> list[Any]:
+    """Model JSON is loose: a bare string means a one-item list, anything else non-list means none."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []
+
+
 def last_json_block(text: str) -> dict[str, Any] | None:
     """Return the last fenced JSON object in ``text`` that parses."""
     for raw in reversed(_FENCE.findall(text or "")):
@@ -47,10 +56,10 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
     valid = set(valid_labels)
     data = last_json_block(text)
     if data is not None:
-        ranking = [_clean_label(x) for x in data.get("ranking") or []]
+        ranking = [_clean_label(x) for x in as_list(data.get("ranking"))]
         ranking = list(dict.fromkeys(label for label in ranking if label in valid))
         review = Review(ranking=ranking)
-        for item in data.get("reviews") or []:
+        for item in as_list(data.get("reviews")):
             if not isinstance(item, dict):
                 continue
             label = _clean_label(item.get("label", ""))
@@ -65,7 +74,7 @@ def parse_review(text: str, valid_labels: list[str]) -> Review:
             review.scores[label] = scores
             review.critiques[label] = str(item.get("critique", "")).strip()
             review.suspect_claims[label] = [
-                str(c).strip() for c in item.get("suspect_claims") or [] if str(c).strip()
+                str(c).strip() for c in as_list(item.get("suspect_claims")) if isinstance(c, str) and c.strip()
             ]
         if not review.ranking:
             # Keep the scores and suspect claims; take the ranking from the text if there is one.

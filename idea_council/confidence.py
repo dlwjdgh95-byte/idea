@@ -13,9 +13,10 @@ with a conflict of interest are never counted.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 Grade = Literal["A", "B", "C"]
 Stance = Literal["support", "contradict"]
@@ -112,8 +113,52 @@ def _norm(value: str) -> str:
 
 
 def _domain(url: str) -> str:
-    host = urlparse(url).netloc.lower()
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
     return host.removeprefix("www.")
+
+
+_DOI = re.compile(r"(10\.\d{4,9}/[^\s?#]+)", re.IGNORECASE)
+_DOI_TAIL = re.compile(
+    r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
+    re.IGNORECASE,
+)
+_ARXIV = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.IGNORECASE)
+
+
+def doi_of(url: str) -> str | None:
+    """DOI in a URL, without version/view suffixes that publishers append (v3, .full, /abstract, /pdf)."""
+    match = _DOI.search(unquote(url))
+    if not match:
+        return None
+    doi = match.group(1).rstrip(".,;)/")
+    trimmed = _DOI_TAIL.sub("", doi).rstrip(".,;)/")
+    return trimmed if "/" in trimmed and trimmed.split("/", 1)[1] else doi
+
+
+def work_id(url: str) -> str | None:
+    """A key for 'the same paper' across mirrors: DOI (arXiv ids mapped to their DataCite DOI)."""
+    arxiv = _ARXIV.search(url)
+    if arxiv:
+        return "10.48550/arxiv." + arxiv.group(1)
+    doi = doi_of(url)
+    return doi.lower() if doi else None
+
+
+# Hosting platforms and publishers are not the operator of a paper; its authors are.
+PLATFORM_OPERATORS: tuple[str, ...] = (
+    "pubmed", "ncbi", "nlm", "arxiv", "biorxiv", "medrxiv", "semantic scholar", "google scholar", "openalex",
+    "researchgate", "ssrn", "zenodo", "osf", "elsevier", "sciencedirect", "springer", "wiley", "nature",
+    "taylor", "sage", "mdpi", "frontiers", "plos", "ieee", "acm", "oxford university press",
+    "cambridge university press", "jstor", "crossref", "doi.org", "acl anthology",
+)
+
+
+def _is_platform(operator: str) -> bool:
+    op = _norm(operator)
+    return any(op == p or op.startswith((p + " ", p + "(")) for p in PLATFORM_OPERATORS)
 
 
 def independent_groups(evidence: list[Evidence]) -> list[Group]:
@@ -134,18 +179,23 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
 
     seen: dict[str, int] = {}
     for idx, item in enumerate(items):
-        keys = []
-        if item.operator.strip():
-            keys.append("op:" + _norm(item.operator))
-        if item.origin.strip():
-            keys.append("origin:" + _norm(item.origin))
         if not (item.operator.strip() and item.origin.strip()):
-            keys.append("unknown")  # independence cannot be shown without both
-        # Two pages of the same site share an operator, except on hosting
-        # platforms where unrelated authors publish side by side.
-        domain = _domain(item.url) if item.url else ""
-        if domain and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
-            keys.append("domain:" + domain)
+            # Independence cannot be shown without both. These sources only join one
+            # shared bucket, so they never bridge otherwise independent groups.
+            keys = ["unknown"]
+        else:
+            keys = ["origin:" + _norm(item.origin)]
+            if not _is_platform(item.operator):
+                keys.append("op:" + _norm(item.operator))
+            # Two pages of the same site share an operator, except on hosting
+            # platforms where unrelated authors publish side by side.
+            domain = _domain(item.url) if item.url else ""
+            if domain and not any(domain == h or domain.endswith("." + h) for h in HOSTING_DOMAINS):
+                keys.append("domain:" + domain)
+        # One paper reached through several mirrors (doi.org, publisher, PubMed, ...) is one source.
+        wid = work_id(item.url) if item.url else None
+        if wid:
+            keys.append("work:" + wid)
         for key in keys:
             if key in seen:
                 union(seen[key], idx)
@@ -166,6 +216,13 @@ def independent_groups(evidence: list[Evidence]) -> list[Group]:
     ]
 
 
+def _cap_unconfirmed(groups: list[Group]) -> list[Group]:
+    """Groups whose quotes could not be confirmed count at most once (the strongest of them)."""
+    confirmed = [g for g in groups if g.confirmed]
+    unconfirmed = sorted((g for g in groups if not g.confirmed), key=lambda g: (not g.primary, g.best_grade))
+    return confirmed + unconfirmed[:1]
+
+
 def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdict:
     """Apply the rubric.
 
@@ -173,7 +230,7 @@ def assess(evidence: list[Evidence], *, counter_searched: bool = True) -> Verdic
     pass needs at least one deciding source whose quote the code confirmed.
     Either failing caps the claim at 70 (조건부) instead of 80+.
     """
-    support = independent_groups([e for e in evidence if e.stance == "support"])
+    support = _cap_unconfirmed(independent_groups([e for e in evidence if e.stance == "support"]))
     contra = independent_groups([e for e in evidence if e.stance == "contradict"])
     sup, con = len(support), len(contra)
     a_sup = sum(1 for g in support if g.best_grade == "A")

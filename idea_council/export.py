@@ -80,7 +80,7 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             "주장": c.claim,
             "판정": _judgement(c),
             "확신도(%)": v.confidence / 100,
-            "중요도": "핵심" if " ".join(c.claim.lower().split()) in key else "보조",
+            "중요도": "핵심" if c.key or " ".join(c.claim.lower().split()) in key else "보조",
             "검증 경로": PATH_LABEL[v.path],
             "출처 등급": GRADE_LABEL[best],
             "독립 출처 수": v.independent_support,
@@ -98,6 +98,19 @@ def notion_claim_rows(result: CouncilResult, idea_page_url: str | None = None) -
             row["아이디어"] = json.dumps([idea_page_url])
         rows.append(row)
     return rows
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().rstrip("%"))
+        except ValueError:
+            return None
+    return None
 
 
 def _link_types(value: Any) -> list[str]:
@@ -122,8 +135,10 @@ def notion_link_rows(result: CouncilResult, idea_page_url: str | None = None) ->
         question = str(link.get("question", "")).strip()
         if question:
             row["다음 질문"] = question[:1900]
-        if isinstance(strength, (int, float)) and not isinstance(strength, bool):
-            row["강도(%)"] = max(0.0, min(1.0, float(strength) / 100))
+        value = _number(strength)
+        if value is not None:
+            fraction = value if 0 < value <= 1 and not float(value).is_integer() else value / 100
+            row["강도(%)"] = max(0.0, min(1.0, fraction))
         if idea_page_url:
             row["아이디어"] = json.dumps([idea_page_url])
         rows.append(row)

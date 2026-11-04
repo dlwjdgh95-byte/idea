@@ -113,3 +113,37 @@ def test_unconfirmed_quotes_cannot_pass_alone():
     three = [ev(f"https://n{i}.com/1", operator=f"N{i}", origin=f"o{i}", checked="unchecked: access refused")
              for i in range(3)]
     assert not assess(three).passed
+
+
+def test_one_paper_through_several_mirrors_is_one_source():
+    v = assess([
+        ev("https://doi.org/10.48550/arXiv.2306.05685", "A", operator="UC Berkeley", origin="own"),
+        ev("https://www.semanticscholar.org/paper/10.48550/arXiv.2306.05685", "A", operator="LMSYS", origin="paper"),
+        ev("https://arxiv.org/abs/2306.05685", "A", operator="Zheng et al.", origin="arXiv 2306.05685"),
+    ])
+    assert v.independent_support == 1 and not v.passed
+
+
+def test_platform_operator_does_not_merge_different_papers():
+    v = assess([
+        ev("https://pubmed.ncbi.nlm.nih.gov/1/", "A", operator="PubMed (NLM)", origin="Kim 2020 trial"),
+        ev("https://pubmed.ncbi.nlm.nih.gov/2/", "A", operator="PubMed (NLM)", origin="Lee 2022 cohort"),
+    ])
+    assert v.independent_support == 2 and v.path == "path1"
+
+
+def test_unknown_sources_do_not_bridge_independent_groups():
+    v = assess([
+        ev("https://x.org/1", "A", operator="X", origin="x1"),
+        ev("https://y.org/1", "A", operator="Y", origin="y1"),
+        ev("https://x.org/2", operator="X"),
+        ev("https://y.org/2", operator="Y"),
+    ])
+    assert v.path == "path1"
+
+
+def test_unconfirmed_groups_count_once():
+    srcs = [ev(f"https://n{i}.com/1", operator=f"N{i}", origin=f"o{i}",
+               checked="quote found" if i == 0 else "unchecked: access refused") for i in range(4)]
+    v = assess(srcs)
+    assert v.independent_support == 2 and not v.passed

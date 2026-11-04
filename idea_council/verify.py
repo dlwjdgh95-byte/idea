@@ -16,13 +16,13 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
-from .confidence import Evidence, Verdict, assess
+from .confidence import HOSTING_DOMAINS, Evidence, Verdict, assess, doi_of
 from .llm import LLM
-from .parsing import last_json_block
+from .parsing import as_list, last_json_block
 from .prompts import verify_messages
 
 
@@ -35,6 +35,7 @@ class ClaimCheck:
     counter_search: str = ""
     notes: str = ""
     error: str | None = None
+    key: bool = False  # the claim was marked key by a member (중요도 핵심)
 
 
 _SUPPORT = ("support", "supports", "supporting", "지지")
@@ -73,6 +74,10 @@ def _to_evidence(item: dict[str, Any]) -> Evidence | None:
     )
 
 
+def _text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
 def counter_searched(text: str) -> bool:
     """The rule's path 2 needs a counter-evidence search; an empty or 'not done' note does not count."""
     t = text.strip().lower()
@@ -81,7 +86,6 @@ def counter_searched(text: str) -> bool:
     return not any(m in t for m in ("not performed", "not done", "none performed", "안 함", "하지 않", "생략", "n/a"))
 
 
-_DOI = re.compile(r"(10\.\d{4,9}/[^\s?#]+)", re.IGNORECASE)
 _TAGS = re.compile(r"<(script|style)\b.*?</\1>|<[^>]+>", re.IGNORECASE | re.DOTALL)
 _NON_WORD = re.compile(r"[\W_]+", re.UNICODE)
 MIN_QUOTE_CHARS = 15  # per piece, after normalisation (letters and digits only); shorter proves nothing
@@ -150,22 +154,6 @@ async def _resolve(host: str, port: int) -> list[str]:
     return [info[4][0] for info in infos]
 
 
-_DOI_TAIL = re.compile(
-    r"(?:v\d+)?(?:[./](?:full|abstract|pdf|epdf|html|fulltext|full-text|supplemental|references)(?:\.pdf)?)*$",
-    re.IGNORECASE,
-)
-
-
-def doi_of(url: str) -> str | None:
-    """DOI in a URL, without version/view suffixes that publishers append (v3, .full, /abstract, /pdf)."""
-    match = _DOI.search(unquote(url))
-    if not match:
-        return None
-    doi = match.group(1).rstrip(".,;)/")
-    trimmed = _DOI_TAIL.sub("", doi).rstrip(".,;)/")
-    return trimmed if "/" in trimmed and trimmed.split("/", 1)[1] else doi
-
-
 def _openalex_text(work: dict[str, Any]) -> str:
     """Title plus abstract (OpenAlex stores abstracts as an inverted index)."""
     words: dict[int, str] = {}
@@ -201,6 +189,50 @@ async def _openalex_check(client: httpx.AsyncClient, doi: str) -> tuple[str | No
 MAX_REDIRECTS = 5
 
 
+_META_CHARSET = re.compile(rb"""<meta[^>]+charset=["']?([A-Za-z0-9_\-]+)""", re.IGNORECASE)
+
+
+def _charset(resp: httpx.Response, raw: bytes) -> str:
+    """Header charset, else a <meta charset> in the first 4 KB (EUC-KR pages often only declare it there)."""
+    if resp.charset_encoding:
+        return resp.charset_encoding
+    match = _META_CHARSET.search(raw[:4096])
+    if match:
+        name = match.group(1).decode("ascii", "ignore")
+        try:
+            "".encode(name)
+            return name
+        except LookupError:
+            pass
+    return "utf-8"
+
+
+async def _fetch(client: httpx.AsyncClient, url: str) -> tuple[int, str, str, str]:
+    """GET one hop without following redirects: (status, content type, text body, redirect target)."""
+    async with client.stream("GET", url, follow_redirects=False) as resp:
+        if resp.is_redirect and resp.headers.get("location"):
+            return resp.status_code, "", "", str(resp.url.join(resp.headers["location"]))
+        content_type = resp.headers.get("content-type", "").lower()
+        chunks, size = [], 0
+        if resp.status_code < 400 and ("text" in content_type or "html" in content_type or "xml" in content_type):
+            async for chunk in resp.aiter_bytes():
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= MAX_PAGE_BYTES:
+                    break
+        raw = b"".join(chunks)
+        return resp.status_code, content_type, raw.decode(_charset(resp, raw), errors="replace"), ""
+
+
+def _trusted_doi_host(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return False
+    trusted = (*HOSTING_DOMAINS, "dx.doi.org", "doi.org")
+    return any(host == h or host.endswith("." + h) for h in trusted)
+
+
 async def check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Evidence | None, str]:
     """Keep, annotate or drop one piece of evidence. Never raises.
 
@@ -224,28 +256,24 @@ async def _check_source(client: httpx.AsyncClient, ev: Evidence) -> tuple[Eviden
         if reason:
             return None, f"{ev.url}: {reason}"
     note = "" if openalex_ok else "; OpenAlex unavailable, retraction not checked"
-    if record and quote_in_page(ev.quote, _squash(record)):
+    # The OpenAlex record may stand in for the page only on doi.org or a known publisher/repository
+    # host; any other URL must be opened, so a made-up mirror cannot borrow a real paper's abstract.
+    record_ok = bool(record) and quote_in_page(ev.quote, _squash(record))
+    if record_ok and _trusted_doi_host(ev.url):
         return replace(ev, checked="quote found (OpenAlex record)" + note), ""
 
     url = ev.url
     for _ in range(MAX_REDIRECTS + 1):
         if not await _public_http_url(url):
             return None, f"{ev.url}: not a public URL ({url})"
-        async with client.stream("GET", url, follow_redirects=False) as resp:
-            if resp.is_redirect and resp.headers.get("location"):
-                url = str(resp.url.join(resp.headers["location"]))
-                continue
-            status = resp.status_code
-            content_type = resp.headers.get("content-type", "").lower()
-            chunks, size = [], 0
-            if status < 400 and ("text" in content_type or "html" in content_type or "xml" in content_type):
-                async for chunk in resp.aiter_bytes():
-                    chunks.append(chunk)
-                    size += len(chunk)
-                    if size >= MAX_PAGE_BYTES:
-                        break
-            body = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
-            break
+        try:
+            status, content_type, body, location = await _fetch(client, url)
+        except httpx.HTTPError as exc:
+            return None, f"{ev.url}: unreachable ({type(exc).__name__})"
+        if location:
+            url = location
+            continue
+        break
     else:
         return None, f"{ev.url}: too many redirects"
     if status in (401, 403, 429):
@@ -281,16 +309,16 @@ class Verifier:
         if not completion.ok:
             return ClaimCheck(claim=claim, verdict=assess([]), error=completion.error)
         data = last_json_block(completion.text) or {}
-        evidence = [e for e in (_to_evidence(x) for x in data.get("evidence") or [] if isinstance(x, dict)) if e]
+        evidence = [e for e in (_to_evidence(x) for x in as_list(data.get("evidence")) if isinstance(x, dict)) if e]
         dropped: list[str] = []
         if self.check_urls:
             evidence, dropped = await filter_sources(evidence)
-        counter = str(data.get("counter_search", "")).strip()
+        counter = _text(data.get("counter_search"))
         return ClaimCheck(
             claim=claim,
             verdict=assess(evidence, counter_searched=counter_searched(counter)),
             evidence=evidence,
             dropped=dropped,
             counter_search=counter,
-            notes=str(data.get("notes", "")).strip(),
+            notes=_text(data.get("notes")),
         )
