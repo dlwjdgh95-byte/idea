@@ -341,3 +341,11 @@ def test_short_korean_nothing_found_note_counts_as_search():
     from idea_council.verify import counter_searched
     assert counter_searched("반박 근거는 존재하지 않음")
     assert not counter_searched("검색 안 함")
+
+
+def test_flags_stances_and_nat64():
+    from idea_council.verify import _flag, _global_ip, _stance
+    assert _flag("yes") and _flag(1) and not _flag(0) and not _flag("no")
+    assert _stance("partially contradicts") == "contradict" and _stance("partially supports") is None
+    assert _stance("supports the claim") == "support"
+    assert not _global_ip("64:ff9b::7f00:1")

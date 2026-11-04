@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import math
 import re
 from typing import Any
 
@@ -145,7 +146,7 @@ def notion_link_rows(result: CouncilResult, idea_page_url: str | None = None) ->
         if question:
             row["다음 질문"] = question[:1900]
         value = _number(strength)
-        if value is not None:
+        if value is not None and math.isfinite(value):
             fraction = value if 0 < value <= 1 and not float(value).is_integer() else value / 100
             row["강도(%)"] = max(0.0, min(1.0, fraction))
         if idea_page_url:

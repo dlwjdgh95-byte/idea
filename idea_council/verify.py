@@ -46,7 +46,9 @@ _CONTRA = ("contra", "refut", "oppos", "against", "disput", "rebut", "반대", "
 def _stance(value: Any) -> str | None:
     """Map the verifier's stance to support/contradict; anything else (neutral, mixed, ...) is dropped."""
     text = str(value or "").strip().lower()
-    if text in _SUPPORT:
+    if text.startswith(("partial", "부분")):  # a partial contradiction must not vanish; a partial support is not support
+        return "contradict" if any(c in text for c in _CONTRA) else None
+    if text in _SUPPORT or text.startswith(("supports ", "supporting ")):
         return "support"
     if text.startswith(_CONTRA):
         return "contradict"
@@ -54,7 +56,9 @@ def _stance(value: Any) -> str | None:
 
 
 def _flag(value: Any) -> bool:
-    return value is True or str(value).strip().lower() == "true"
+    if value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1):
+        return True
+    return str(value).strip().lower() in ("true", "yes", "y", "1", "예")
 
 
 def _to_evidence(item: dict[str, Any]) -> Evidence | None:
@@ -150,9 +154,19 @@ def quote_in_page(quote: str, page: str, max_gap: int = 2000) -> bool:
     return False
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+
+
 def _global_ip(text: str) -> bool:
     try:
-        return ipaddress.ip_address(text.split("%", 1)[0]).is_global
+        ip = ipaddress.ip_address(text.split("%", 1)[0])
+    except ValueError:
+        return False
+    if ip.version == 6 and (ip in _NAT64 or ip in _NAT64_LOCAL):  # NAT64 can reach an embedded private IPv4
+        return False
+    try:
+        return ip.is_global
     except ValueError:
         return False
 
