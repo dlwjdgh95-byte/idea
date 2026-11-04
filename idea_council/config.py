@@ -21,6 +21,7 @@ DEFAULT_MEMBERS: tuple[str, ...] = (
 DEFAULT_CHAIRMAN = "google/gemini-3.1-pro-preview"
 DEFAULT_VERIFIER = "anthropic/claude-sonnet-5.5"
 DEFAULT_ROLES: tuple[str, ...] = ("expander", "critic", "builder", "connector")
+BACKENDS: tuple[str, ...] = ("openrouter", "claude-code")
 
 
 def _split(value: str | None) -> tuple[str, ...]:
@@ -59,12 +60,26 @@ class CouncilConfig:
         return tuple(dict.fromkeys((*self.members, self.chairman, self.verifier)))
 
     @classmethod
-    def from_env(cls) -> CouncilConfig:
+    def from_env(cls, backend: str = "openrouter") -> CouncilConfig:
+        """Read overrides from the environment; defaults depend on the backend.
+
+        ``claude-code`` defaults to one Claude model of each size (see
+        :mod:`idea_council.claude_code`), because that backend cannot reach
+        other vendors' models.
+        """
+        if backend not in BACKENDS:
+            raise ValueError(f"unknown backend {backend!r}; use one of {', '.join(BACKENDS)}")
+        if backend == "claude-code":
+            from .claude_code import CLAUDE_CHAIRMAN, CLAUDE_MEMBERS, CLAUDE_VERIFIER
+
+            members, chairman, verifier = CLAUDE_MEMBERS, CLAUDE_CHAIRMAN, CLAUDE_VERIFIER
+        else:
+            members, chairman, verifier = DEFAULT_MEMBERS, DEFAULT_CHAIRMAN, DEFAULT_VERIFIER
         seed = os.environ.get("COUNCIL_SEED")
         return cls(
-            members=_split(os.environ.get("COUNCIL_MODELS")) or DEFAULT_MEMBERS,
-            chairman=os.environ.get("CHAIRMAN_MODEL") or DEFAULT_CHAIRMAN,
-            verifier=os.environ.get("VERIFIER_MODEL") or DEFAULT_VERIFIER,
+            members=_split(os.environ.get("COUNCIL_MODELS")) or members,
+            chairman=os.environ.get("CHAIRMAN_MODEL") or chairman,
+            verifier=os.environ.get("VERIFIER_MODEL") or verifier,
             roles=_split(os.environ.get("COUNCIL_ROLES")) or DEFAULT_ROLES,
             rotate_roles=os.environ.get("COUNCIL_ROTATE_ROLES", "1") != "0",
             max_claims_to_verify=int(os.environ.get("COUNCIL_MAX_CLAIMS", "8")),

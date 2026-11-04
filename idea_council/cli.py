@@ -6,19 +6,34 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import os
 import pathlib
 import sys
 
 import httpx
 
-from .config import CouncilConfig
-from .council import Council
+from .claude_code import ClaudeCodeClient
+from .config import BACKENDS, CouncilConfig
+from .council import Council, roles_from_run
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
-from .llm import OpenRouterClient, missing_models
+from .llm import LLM, OpenRouterClient, missing_models
 
 
 def _read(path: str | None) -> str:
     return pathlib.Path(path).read_text(encoding="utf-8") if path else ""
+
+
+def previous_roles(out: pathlib.Path) -> dict[str, str]:
+    """Roles from the newest saved run in ``out``, so the next run can rotate them one step."""
+    runs = sorted(p for p in out.glob("*.json") if not p.name.endswith(".notion.json")) if out.is_dir() else []
+    for path in reversed(runs):
+        try:
+            roles = roles_from_run(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+        if roles:
+            return roles
+    return {}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="runs", help="결과 저장 폴더")
     parser.add_argument("--no-verify", action="store_true", help="사실 검증 게이트를 건너뜀")
     parser.add_argument("--skip-model-check", action="store_true", help="OpenRouter 모델 목록 확인을 건너뜀")
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default=os.environ.get("COUNCIL_BACKEND") or "openrouter",
+        help="openrouter(여러 회사 모델, 키 필요) 또는 claude-code(로컬 claude CLI, 키 불필요)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -39,11 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"파일을 읽지 못했습니다: {exc}\n")
         return 2
     try:
-        config = CouncilConfig.from_env()
+        config = CouncilConfig.from_env(args.backend)
     except ValueError as exc:
         sys.stderr.write(f"설정 오류: {exc}\n")
         return 2
-    if not args.skip_model_check:
+    if args.backend == "openrouter" and not args.skip_model_check:
         try:
             missing = asyncio.run(missing_models(config.all_models()))
         except httpx.HTTPError as exc:
@@ -55,21 +76,24 @@ def main(argv: list[str] | None = None) -> int:
                     + "\nCOUNCIL_MODELS, CHAIRMAN_MODEL, VERIFIER_MODEL 환경 변수로 바꾸십시오.\n"
                 )
                 return 2
+    llm: LLM
     try:
-        llm = OpenRouterClient(
-            timeout_s=config.timeout_s,
-            web_search_max_results=config.web_search_max_results,
-            extra_headers=dict(config.extra_headers),
-        )
+        if args.backend == "claude-code":
+            llm = ClaudeCodeClient(timeout_s=max(config.timeout_s, 300.0))
+        else:
+            llm = OpenRouterClient(
+                timeout_s=config.timeout_s,
+                web_search_max_results=config.web_search_max_results,
+                extra_headers=dict(config.extra_headers),
+            )
     except RuntimeError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
     ideas = [line.strip() for line in ideas_text.splitlines() if line.strip()]
-    result = asyncio.run(
-        Council(llm, config).run(args.question, context, ideas, verify=not args.no_verify)
-    )
-
     out = pathlib.Path(args.out)
+    council = Council(llm, config, previous_roles=previous_roles(out))
+    result = asyncio.run(council.run(args.question, context, ideas, verify=not args.no_verify))
+
     out.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     (out / f"{stamp}.md").write_text(to_markdown(result), encoding="utf-8")

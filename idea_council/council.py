@@ -171,6 +171,29 @@ def aggregate(reviews: list[ReviewRecord], answers: list[MemberAnswer]) -> list[
     return sorted(standings, key=lambda s: (s.average_rank is None, s.average_rank or 0.0))
 
 
+def blind_names(answers: list[MemberAnswer]) -> dict[str, str]:
+    """Member id -> role name shown to the chairman ("확장자", or "확장자 2" when a role repeats)."""
+    names: dict[str, str] = {}
+    seen: dict[str, int] = {}
+    for a in answers:
+        role = ROLES.get(a.role, (a.role, ""))[0]
+        seen[role] = seen.get(role, 0) + 1
+        names[a.member] = role if seen[role] == 1 else f"{role} {seen[role]}"
+    return names
+
+
+def roles_from_run(data: Any) -> dict[str, str]:
+    """Member -> role from a saved run (the ``to_json`` output); empty when the shape is unexpected."""
+    answers = data.get("answers") if isinstance(data, dict) else None
+    if not isinstance(answers, list):
+        return {}
+    return {
+        a["member"]: a["role"]
+        for a in answers
+        if isinstance(a, dict) and isinstance(a.get("member"), str) and isinstance(a.get("role"), str)
+    }
+
+
 class Council:
     def __init__(
         self,
@@ -179,15 +202,27 @@ class Council:
         *,
         verifier: Verifier | None = None,
         rng: random.Random | None = None,
+        previous_roles: dict[str, str] | None = None,
     ) -> None:
         self.llm = llm
         self.config = config or CouncilConfig()
         self.rng = rng or random.Random(self.config.seed)
+        self.previous_roles = dict(previous_roles or {})
         self.verifier = verifier or Verifier(llm, self.config.verifier, check_urls=self.config.check_source_urls)
 
     # Stage 1 -----------------------------------------------------------------
     def assign_roles(self) -> list[tuple[str, str]]:
+        """Give each member a role.
+
+        When ``previous_roles`` (member -> role from the last run) covers every
+        member, each member moves one step along ``config.roles``, so after
+        ``len(roles)`` runs every model has played every role once. Otherwise
+        the roles are shuffled.
+        """
         roles = list(self.config.roles)
+        prev = self.previous_roles
+        if self.config.rotate_roles and all(prev.get(m) in roles for m in self.config.members):
+            return [(m, roles[(roles.index(prev[m]) + 1) % len(roles)]) for m in self.config.members]
         if self.config.rotate_roles:
             self.rng.shuffle(roles)
         return [(m, roles[i % len(roles)]) for i, m in enumerate(self.config.members)]
@@ -275,11 +310,12 @@ class Council:
         reviews: list[ReviewRecord],
         checks: list[ClaimCheck],
     ) -> tuple[str, dict[str, Any], str | None]:
-        answers_block = "\n\n".join(
-            f"### {ROLES.get(a.role, (a.role, ''))[0]} ({a.member})\n{a.text}" for a in answers if a.ok
-        )
+        # The chairman sees roles only, never model ids, so it cannot favour
+        # (or recognise by name) the answer of its own model.
+        names = blind_names(answers)
+        answers_block = "\n\n".join(f"### {names[a.member]}\n{a.text}" for a in answers if a.ok)
         ranking_block = "\n".join(
-            f"- {s.member} ({ROLES.get(s.role, (s.role, ''))[0]}): 평균 순위 {s.average_rank}, "
+            f"- {names.get(s.member, '?')}: 평균 순위 {s.average_rank}, "
             f"검토 {s.rankings_count}회, 점수 {s.mean_scores}"
             for s in standings
         )
@@ -288,7 +324,7 @@ class Council:
             for label, critique in record.review.critiques.items():
                 target = record.label_to_member.get(label, "?")
                 if critique:
-                    review_lines.append(f"- {record.reviewer} → {target}: {critique}")
+                    review_lines.append(f"- {names.get(record.reviewer, '?')} → {names.get(target, '?')}: {critique}")
         checks_block = "\n".join(
             f"- {c.claim} | 검증 실패({c.error}) | 사실로 쓰지 말 것"
             if c.error
