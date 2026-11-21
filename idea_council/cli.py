@@ -16,7 +16,14 @@ from .claude_code import ClaudeCodeClient
 from .config import BACKENDS, DEFAULT_BACKEND, CouncilConfig
 from .council import Council, roles_from_run
 from .export import notion_claim_rows, notion_link_rows, to_json, to_markdown
-from .gemini import AgyClient, RoutedClient, gemini_available, gemini_client, missing_gemini_models
+from .gemini import (
+    AgyClient,
+    RoutedClient,
+    gemini_available,
+    gemini_client,
+    missing_agy_models,
+    missing_gemini_models,
+)
 from .llm import LLM, OpenRouterClient, missing_models
 
 
@@ -87,15 +94,19 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             sys.stderr.write(f"{exc}\n")
             return 2
-    if gemini is not None and not isinstance(gemini, AgyClient) and not args.skip_model_check:
+    if gemini is not None and not args.skip_model_check:
+        where = "agy" if isinstance(gemini, AgyClient) else "Gemini API"
         try:
-            missing = asyncio.run(missing_gemini_models(config.all_models()))
-        except httpx.HTTPError as exc:
-            sys.stderr.write(f"경고: Gemini 모델 목록을 확인하지 못했습니다({exc}). 그대로 진행합니다.\n")
+            if isinstance(gemini, AgyClient):
+                missing = missing_agy_models(gemini.binary, config.all_models())
+            else:
+                missing = asyncio.run(missing_gemini_models(config.all_models()))
+        except (httpx.HTTPError, RuntimeError) as exc:
+            sys.stderr.write(f"경고: {where} 모델 목록을 확인하지 못했습니다({exc}). 그대로 진행합니다.\n")
         else:
             if missing:
                 sys.stderr.write(
-                    "Gemini API에 없는 모델입니다: " + ", ".join(missing)
+                    f"{where}에 없는 모델입니다: " + ", ".join(missing)
                     + "\nGEMINI_MODELS 환경 변수로 바꾸십시오.\n"
                 )
                 return 2

@@ -124,7 +124,7 @@ def test_mixed_backend_seats_gemini_next_to_claude(monkeypatch):
     for var in ("COUNCIL_MODELS", "CHAIRMAN_MODEL", "VERIFIER_MODEL", "GEMINI_MODELS"):
         monkeypatch.delenv(var, raising=False)
     config = CouncilConfig.from_env("mixed")
-    assert config.members == (*CLAUDE_MEMBERS, "gemini-4-argon-high", "gemini-3.8-flash-high")
+    assert config.members == (*CLAUDE_MEMBERS, "gemini-4-neon-high", "gemini-4-hydrogen-high")
     assert config.chairman == CLAUDE_CHAIRMAN
     monkeypatch.setenv("GEMINI_MODELS", "gemini-other")
     assert CouncilConfig.from_env("mixed").members[4:] == ("gemini-other",)
@@ -194,3 +194,82 @@ def test_gemini_client_prefers_agy_and_falls_back_to_the_key(monkeypatch):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         gemini_client()
+
+
+def test_api_model_id_drops_the_agy_reasoning_level():
+    assert gemini_mod.api_model_id("gemini-4-neon-high") == "gemini-4-neon"
+    assert gemini_mod.api_model_id("gemini-4-hydrogen-xhigh") == "gemini-4-hydrogen"
+    assert gemini_mod.api_model_id("gemini-3.8-flash") == "gemini-3.8-flash"
+
+
+def test_api_path_accepts_agy_ids(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"models": [{"name": "models/gemini-4-neon"}]})
+        assert request.url.path.endswith("/models/gemini-4-neon:generateContent")
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    missing = asyncio.run(missing_gemini_models(["gemini-4-neon-high", "gemini-4-gone-high"], api_key="k"))
+    assert missing == ["gemini-4-gone-high"]
+    c = asyncio.run(GeminiClient("k").complete("gemini-4-neon-high", [{"role": "user", "content": "hi"}]))
+    assert c.ok and c.text == "ok" and c.model == "gemini-4-neon-high"
+
+
+def test_missing_agy_models_reads_the_agy_list(tmp_path):
+    binary = fake_agy(tmp_path, (
+        "print('Fetching available models...')\n"
+        "print('gemini-4-neon-high\\tGemini 4 Neon (High)')\n"
+        "print('gemini-4-hydrogen-high\\tGemini 4 Hydrogen (High)')\n"
+    ))
+    assert gemini_mod.missing_agy_models(binary, ["opus", "gemini-4-neon-high", "gemini-4-argon-high"]) == [
+        "gemini-4-argon-high"]
+    broken = fake_agy(tmp_path, "import sys\nprint('not logged in', file=sys.stderr)\nsys.exit(1)\n")
+    with pytest.raises(RuntimeError, match="not logged in"):
+        gemini_mod.missing_agy_models(broken, ["gemini-4-neon-high"])
+
+
+class _StopBeforeCouncil(Exception):
+    pass
+
+
+def _mixed_cli(tmp_path, monkeypatch, agy_body: str, *extra: str) -> int:
+    binary = fake_agy(tmp_path, agy_body)
+    monkeypatch.setattr(cli, "gemini_client", lambda timeout_s=300.0: AgyClient(binary))
+
+    def no_claude(**kw):
+        raise _StopBeforeCouncil  # past the model check: never reach a real claude call
+
+    monkeypatch.setattr(cli, "ClaudeCodeClient", no_claude)
+    monkeypatch.setenv("GEMINI_MODELS", "gemini-4-neon-high,gemini-old-high")
+    for var in ("COUNCIL_MODELS", "CHAIRMAN_MODEL", "VERIFIER_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    return cli.main(["q", "--backend", "mixed", "--out", str(tmp_path / "runs"), *extra])
+
+
+LISTS_NEON_ONLY = "print('gemini-4-neon-high\\tGemini 4 Neon (High)')\n"
+
+
+def test_cli_stops_on_a_gemini_id_agy_does_not_list(tmp_path, monkeypatch, capsys):
+    assert _mixed_cli(tmp_path, monkeypatch, LISTS_NEON_ONLY) == 2
+    assert "agy에 없는 모델입니다: gemini-old-high" in capsys.readouterr().err
+
+
+def test_cli_skip_model_check_and_unreadable_list_both_go_on(tmp_path, monkeypatch, capsys):
+    with pytest.raises(_StopBeforeCouncil):
+        _mixed_cli(tmp_path, monkeypatch, LISTS_NEON_ONLY, "--skip-model-check")
+    with pytest.raises(_StopBeforeCouncil):
+        _mixed_cli(tmp_path, monkeypatch, "import sys\nprint('not logged in', file=sys.stderr)\nsys.exit(1)\n")
+    assert "경고: agy 모델 목록을 확인하지 못했습니다" in capsys.readouterr().err
+
+
+def test_missing_agy_models_tolerates_spacing_stderr_and_bad_bytes(tmp_path):
+    spaced = fake_agy(tmp_path, (
+        "import sys\n"
+        "sys.stderr.write('Fetching available models...\\n')\n"
+        "sys.stderr.write('gemini-4-neon-high     Gemini 4 Neon (High)\\n')\n"
+        "sys.stdout.buffer.write(b'gemini-4-hydrogen-high \\xff\\n')\n"
+    ))
+    assert gemini_mod.missing_agy_models(spaced, ["gemini-4-neon-high", "gemini-4-hydrogen-high", "gemini-x"]) == [
+        "gemini-x"]

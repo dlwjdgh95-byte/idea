@@ -72,6 +72,7 @@ idea-council "이 아이디어의 가장 약한 고리는?" --context-file card.
 
 - 로컬 `claude` CLI의 로그인으로 호출합니다. 경로는 `CLAUDE_BIN`으로 바꿀 수 있습니다.
 - 기본 구성은 위원 `opus`·`sonnet`·`haiku`·`fable`(크기가 다른 모델을 한 명씩), 의장 `opus`, 검증자 `sonnet`입니다.
+- 이 이름은 Claude Code 별칭이라 각 계열의 최신 모델로 자동 연결됩니다(2026-11-21 확인: `fable`=`claude-fable-5-2`, `opus`=`claude-opus-5-5`, `sonnet`=`claude-sonnet-5-5`, `haiku`=`claude-haiku-5-5`). 크기는 fable > opus > sonnet > haiku 순입니다. 버전을 고정하려면 `COUNCIL_MODELS`에 전체 id를 넣고(위원 전체를 바꾸므로 `mixed`에서는 Gemini id도 함께), `CHAIRMAN_MODEL`·`VERIFIER_MODEL`도 전체 id로 줍니다.
 - 호출마다 단계 프롬프트를 시스템 프롬프트로 쓰고, 도구는 끕니다(검증 단계만 WebSearch·WebFetch). MCP 서버, 설정 파일, 슬래시 명령, 세션 저장도 끄고, 빈 작업 폴더에서 돌려 프로젝트 CLAUDE.md를 읽지 않습니다.
 - 한계(이 백엔드만 쓸 때): 위원이 모두 Claude 계열이라 다른 회사 모델을 섞는 다양성이 없습니다. 크기 섞기, 역할 순환, 의장 블라인드, 답 길이 맞춤으로 일부만 보완합니다. 사실 판정은 모델 투표가 아니라 외부 출처 검증으로만 합니다.
 - 네트워크: 검증 게이트는 출처 페이지와 OpenAlex를 직접 엽니다. 외부 사이트가 막힌 환경에서는 출처를 열지 못해 주장이 "근거 부족"으로 남습니다(거짓 통과는 없음).
@@ -83,13 +84,14 @@ bash scripts/agy_setup.sh   # AGY_OAUTH_TOKEN_B64가 있으면 agy 설치·로�
 idea-council "이 아이디어의 가장 약한 고리는?"   # Gemini 자격이 있으면 자동으로 mixed
 ```
 
-- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 2명(`GEMINI_MODELS`, 기본 큰 모델 `gemini-4-argon-high`와 작은 모델 `gemini-3.8-flash-high`)을 더한 6명입니다. 의장과 검증자는 Claude 그대로입니다. 쓸 수 있는 id는 `~/.agy-bin/agy models`로 봅니다.
+- 위원은 Claude 4명(`opus`·`sonnet`·`haiku`·`fable`)에 Gemini 2명(`GEMINI_MODELS`, 기본 큰 모델 `gemini-4-neon-high`와 작은 모델 `gemini-4-hydrogen-high`)을 더한 6명입니다. 의장과 검증자는 Claude 그대로입니다. 쓸 수 있는 id는 `~/.agy-bin/agy models`로 봅니다.
+- 2026-11-21 갱신: 큰 모델은 agy 목록에서 가장 새 Gemini 4 큰 모델인 Neon(11-18 출시)이 Argon(10-13)을 대신하고, 작은 모델은 Gemini 4의 빠른 모델 Hydrogen(11-12 출시)이 이전 세대가 된 3.8 Flash를 대신합니다. Google 문서상 가장 강한 Gemini 4 Carbon은 agy 목록에 없어 쓰지 않습니다. `-high`는 agy의 추론 단계이며, API 키 경로는 이를 떼고 `gemini-4-neon`처럼 부릅니다(추론 단계는 API 기본값이 되고, API 경로는 키가 없어 실제 호출을 확인하지 않았습니다).
+- 실행 전에 Gemini id를 `agy models`(API 키 경로는 Gemini 모델 목록)와 대조해, 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀). 목록을 못 읽으면 경고만 하고 진행합니다. 이 확인도 본 호출과 같은 빈 임시 폴더·최소 환경에서 돌립니다(`models`는 샌드박스 옵션 없이 목록만 읽음).
 - Gemini는 두 길로 부릅니다. 먼저 Antigravity CLI(`agy -p`)를 `AGY_OAUTH_TOKEN_B64` 로그인 토큰으로 씁니다(Miner 저장소 `blog/scripts/final_polish.py`와 같은 방식, API 키 불필요). 안 되면 `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`)로 Gemini API를 부릅니다.
 - `agy`는 빈 임시 폴더, `--sandbox`, 최소 환경(프록시·인증서 변수만)에서 돌려 다른 비밀값을 넘기지 않습니다.
 - 모델 이름이 `gemini`로 시작하면 Gemini로, 나머지는 `claude -p`로 보냅니다.
 - 세션 안 `idea-council` 스킬은 `scripts/agy_ask.sh <모델> <프롬프트 파일>`로 Gemini 위원을 부릅니다(같은 최소 환경·샌드박스).
 - 역할이 4개라 위원 2명은 역할을 겹쳐 맡습니다(의장에게는 "확장자 2"처럼 보임). 순환은 그대로 한 칸씩 돕니다.
-- API 키 경로는 실행 전에 Gemini 모델 목록과 대조해 없는 id면 멈춥니다(`--skip-model-check`로 건너뜀).
 
 #### OpenRouter 백엔드 (선택)
 
@@ -98,7 +100,7 @@ export OPENROUTER_API_KEY=...
 idea-council "이 아이디어의 가장 약한 고리는?" --backend openrouter
 ```
 
-- 기본 모델은 llm-council README와 같은 구성(OpenAI·Google·Anthropic·xAI 각 1개, 의장 Gemini)이되, README의 `gemini-3-pro-preview`와 `grok-4`가 OpenRouter에서 내려가 2026-11-04 기준 목록에 있는 id로 바꿨습니다.
+- 기본 모델은 llm-council README와 같은 구성(OpenAI·Google·Anthropic·xAI 각 1개, 의장 Gemini)을 2026-11-21 OpenRouter 목록의 최신 id로 맞췄습니다: `openai/gpt-6.2-astra`, `google/gemini-4-neon`(의장), `anthropic/claude-sonnet-5.5`(검증자), `x-ai/grok-4.7`.
 - 모델 id는 자주 바뀌므로 실행 전에 OpenRouter 모델 목록과 대조하고, 없는 id가 있으면 바로 멈춥니다(`--skip-model-check`로 건너뜀).
 - 웹 검색은 OpenRouter의 `openrouter:web_search` 서버 도구를 씁니다.
 - 실제 OpenRouter 호출은 키가 없어 확인하지 않았습니다.

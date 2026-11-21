@@ -1,12 +1,15 @@
 """Council configuration.
 
 The council runs inside Claude by default (the ``claude-code`` backend, see
-:mod:`idea_council.claude_code`): one Claude model of each size.
+:mod:`idea_council.claude_code`): one Claude model of each size. The members
+are Claude Code's model aliases, which follow each family's newest release
+(checked 2026-11-21: fable = claude-fable-5-2, opus = claude-opus-5-5,
+sonnet = claude-sonnet-5-5, haiku = claude-haiku-5-5), so a new Claude release
+needs no change here.
 
 The optional ``openrouter`` backend keeps karpathy/llm-council's line-up (one
 model each from OpenAI, Google, Anthropic and xAI, Gemini as chairman) with
-ids that OpenRouter still lists (checked 2026-11-04; the README's
-gemini-3-pro-preview and grok-4 are gone). Those ids go stale, so the CLI
+ids taken from OpenRouter's model list (checked 2026-11-21). Those ids go stale, so the CLI
 checks them against OpenRouter's model list before a run. Override any
 model with environment variables.
 
@@ -27,16 +30,20 @@ CLAUDE_CHAIRMAN = "opus"
 CLAUDE_VERIFIER = "sonnet"
 
 OPENROUTER_MEMBERS: tuple[str, ...] = (
-    "openai/gpt-5.5",
-    "google/gemini-3.1-pro-preview",
+    "openai/gpt-6.2-astra",
+    "google/gemini-4-neon",
     "anthropic/claude-sonnet-5.5",
     "x-ai/grok-4.7",
 )
-OPENROUTER_CHAIRMAN = "google/gemini-3.1-pro-preview"
+OPENROUTER_CHAIRMAN = "google/gemini-4-neon"
 OPENROUTER_VERIFIER = "anthropic/claude-sonnet-5.5"
 
-#: Gemini members: the large and the small model, as listed by `agy models` (checked 2026-11-04).
-GEMINI_MODELS: tuple[str, ...] = ("gemini-4-argon-high", "gemini-3.8-flash-high")
+#: Gemini members: the large and the small model, as listed by `agy models` (checked 2026-11-21).
+#: Large: Gemini 4 Neon (2026-11-18), the newest large Gemini 4 model agy lists, replaces Argon
+#: (2026-10-13). Small: Gemini 4 Hydrogen (2026-11-12), the fast Gemini 4 model, replaces 3.8 Flash,
+#: which Google now lists as the previous generation. Gemini 4 Carbon, the strongest, is not in agy.
+#: The ``-high`` suffix is agy's reasoning level; the Gemini API path drops it (see gemini.api_model_id).
+GEMINI_MODELS: tuple[str, ...] = ("gemini-4-neon-high", "gemini-4-hydrogen-high")
 
 
 def gemini_models() -> tuple[str, ...]:
