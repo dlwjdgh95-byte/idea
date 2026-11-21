@@ -43,6 +43,14 @@ def is_gemini(model: str) -> bool:
     return model.startswith("gemini")
 
 
+_EFFORT_SUFFIX = re.compile(r"-(?:low|medium|high|xhigh)$")
+
+
+def api_model_id(model: str) -> str:
+    """The Gemini API id for an agy id: agy appends a reasoning level (``gemini-4-neon-high``), the API does not."""
+    return _EFFORT_SUFFIX.sub("", model)
+
+
 def to_gemini_request(messages: list[dict[str, Any]], *, web_search: bool) -> dict[str, Any]:
     """Chat messages -> a generateContent body (system turns become ``systemInstruction``)."""
     system = "\n\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
@@ -111,7 +119,7 @@ async def missing_gemini_models(
             page = data.get("nextPageToken")
             if not page:
                 break
-    return [m for m in models if is_gemini(m) and m not in listed]
+    return [m for m in models if is_gemini(m) and api_model_id(m) not in listed]
 
 
 class GeminiClient:
@@ -131,7 +139,7 @@ class GeminiClient:
         *,
         web_search: bool = False,
     ) -> Completion:
-        url = f"{GEMINI_API}/models/{model}:generateContent"
+        url = f"{GEMINI_API}/models/{api_model_id(model)}:generateContent"
         body = to_gemini_request(messages, web_search=web_search)
         headers = {"x-goog-api-key": self.api_key}
         delay = 2.0
@@ -299,6 +307,38 @@ class AgyClient:
                 await asyncio.sleep(delay)
                 delay *= 2
         return Completion(model=model, text="", error=last_error)
+
+
+def missing_agy_models(binary: str, models: tuple[str, ...] | list[str], timeout_s: float = 60.0) -> list[str]:
+    """Gemini ids that ``agy models`` does not list. Raises RuntimeError if the list cannot be read.
+
+    Runs like a council call: empty temporary directory, minimal environment, own
+    process group (killed as a whole on timeout).
+    """
+    with tempfile.TemporaryDirectory(prefix="idea-council-agy-") as cwd:
+        try:
+            proc = subprocess.Popen(
+                [binary, "models"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=cwd, env=agy_env(), start_new_session=True,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"agy models failed: {type(exc).__name__}: {exc}") from exc
+        try:
+            out_b, err_b = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError:
+                pass
+            proc.communicate()
+            raise RuntimeError(f"agy models timed out after {timeout_s:.0f}s") from exc
+    out, err = out_b.decode("utf-8", "replace"), err_b.decode("utf-8", "replace")
+    # One model per line, its id first ("gemini-4-neon-high<TAB>Gemini 4 Neon (High)"); other lines are chatter.
+    listed = {line.split()[0] for line in (out + "\n" + err).splitlines() if line.split()}
+    if proc.returncode != 0 or not any(is_gemini(m) for m in listed):
+        tail = (err or out).strip().splitlines()[-1:] or ["empty output"]
+        raise RuntimeError(f"agy models exit {proc.returncode}, no Gemini ids listed: {tail[0][:300]}")
+    return [m for m in models if is_gemini(m) and m not in listed]
 
 
 def gemini_client(timeout_s: float = 300.0) -> Any:
